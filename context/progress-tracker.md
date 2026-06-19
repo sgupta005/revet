@@ -4,17 +4,25 @@ Update this file after every meaningful implementation change.
 
 ## Current Phase
 
-Phase 0 — Not started
+Phase 0 — Complete
 
 ## Current Goal
 
-Scaffold: repo layout, `docker-compose` (Postgres+pgvector + Redis), `.env.example`,
-settings/config module, `/health` endpoint, SQLModel models (`metadata.create_all()`),
-and LangSmith integration wired.
+Phase 1 — GitHub App + Webhooks
 
 ## Completed
 
 - PRD reviewed and all context files populated.
+- **Phase 0 — Scaffold** (2026-06-19)
+  - `docker-compose.yml` — Postgres (pgvector/pgvector:pg16) + Redis (redis:7-alpine)
+  - `.env.example` — all required env vars documented
+  - `pyproject.toml` — full dependency list (fastapi, sqlmodel, asyncpg, psycopg, langchain, langgraph, langsmith, celery, httpx, pyjwt, tree-sitter)
+  - `app/config.py` — `Settings` via pydantic-settings, loads from `.env`
+  - `app/db/models.py` — `Installation`, `Repository`, `Rule`, `PullRequest`, `Issue` SQLModel tables + `IndexingStatus` / `PRKind` enums
+  - `app/db/session.py` — async engine (asyncpg), `AsyncSessionLocal`, `create_db()`, `get_session()`
+  - `app/main.py` — FastAPI app, lifespan runs `create_db()` at startup, `/health` endpoint
+  - `ai/`, `ai/graphs/`, `evals/` — empty package stubs for later phases
+  - LangSmith traces automatically when `LANGSMITH_TRACING=true` (env-only wiring)
 
 ## In Progress
 
