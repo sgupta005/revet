@@ -4,11 +4,11 @@ Update this file after every meaningful implementation change.
 
 ## Current Phase
 
-Phase 0 — Complete
+Phase 1 — Complete
 
 ## Current Goal
 
-Phase 1 — GitHub App + Webhooks
+Phase 2 — Indexing
 
 ## Completed
 
@@ -23,6 +23,16 @@ Phase 1 — GitHub App + Webhooks
   - `app/main.py` — FastAPI app, lifespan runs `create_db()` at startup, `/health` endpoint
   - `ai/`, `ai/graphs/`, `evals/` — empty package stubs for later phases
   - LangSmith traces automatically when `LANGSMITH_TRACING=true` (env-only wiring)
+- **Phase 1 — GitHub App + Webhooks** (2026-06-21)
+  - `app/redis_client.py` — lazy singleton `redis.asyncio` client (token cache + delivery dedup)
+  - `app/github/auth.py` — RS256 App JWT minting; `get_installation_token()` mints via GitHub API and caches in Redis with TTL derived from `expires_at` (token minting in one place, invariant #7)
+  - `app/github/webhooks.py` — `POST /webhooks/github`: HMAC `X-Hub-Signature-256` verify first (→ `401`), Redis `SET NX` dedup on `X-GitHub-Delivery`, then dispatch + enqueue
+    - `installation`/`installation_repositories` (created/added) → upsert `Installation` + `Repository` rows, enqueue `index_repo`
+    - `push` → enqueue `index_repo` with changed paths; `pull_request` (opened/synchronize) → `review_pr`; `issues` (opened) → `analyze_issue`, (labeled `auto-fix`) → `auto_pr`
+  - `app/workers/celery_app.py` — Celery app (Redis broker/backend, json serializers)
+  - `app/workers/tasks.py` — stub tasks `index_repo`, `review_pr`, `analyze_issue`, `auto_pr` (log only; graphs land in later phases)
+  - `app/main.py` — router wired via `include_router`
+  - Verified end-to-end with TestClient: bad signature → `401`, valid PR webhook → `200` + `review_pr` enqueued, redelivered delivery-id deduped, unhandled event → `200`; RS256 JWT mint/verify round-trips
 
 ## In Progress
 
@@ -30,30 +40,17 @@ Phase 1 — GitHub App + Webhooks
 
 ## Next Up
 
-1. **Phase 0 — Scaffold**
-   - `docker-compose.yml` with Postgres (pgvector) + Redis services
-   - `.env.example` with all required env vars
-   - `app/config.py` — settings loaded from env (`DATABASE_URL`, `REDIS_URL`, `OPENAI_API_KEY`, `LLM_MODEL`, `EMBEDDING_MODEL`, `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`, `LANGSMITH_TRACING`, `LANGSMITH_API_KEY`, `LANGSMITH_PROJECT`, `ENVIRONMENT`, `LOG_LEVEL`)
-   - `app/db/models.py` — SQLModel models: `Installation`, `Repository`, `Rule`, `PullRequest`, `Issue`
-   - `app/db/session.py` — engine + session factory + `create_all()` on startup
-   - `app/main.py` — FastAPI app with `/health` endpoint and startup event
-   - LangSmith env var wiring (auto-traces when `LANGSMITH_TRACING=true`)
-
-2. **Phase 1 — GitHub App + Webhooks**
-   - `app/github/auth.py` — App JWT (RS256) → installation token, Redis cache
-   - `app/github/webhooks.py` — HMAC verify (`X-Hub-Signature-256`), webhook router
-   - `app/workers/celery_app.py` — Celery app definition
-   - `app/workers/tasks.py` — stub tasks: `index_repo`, `review_pr`, `analyze_issue`, `auto_pr`
-   - Delivery-id dedup via Redis
-
-3. **Phase 2 — Indexing**
-4. **Phase 3 — AI Foundation**
-5. **Phase 4 — Chat**
-6. **Phase 5 — PR Review**
-7. **Phase 6 — Issue Analysis**
-8. **Phase 7 — Auto-PR**
-9. **Phase 8 — Evals**
-10. **Phase 9 — Polish**
+1. **Phase 2 — Indexing**
+   - Tree-sitter chunker; OpenAI embeddings; pgvector upsert (deterministic ids)
+   - `index_repo` task: status transitions `NOT_STARTED → INDEXING → COMPLETED | FAILED`
+   - Incremental re-index on push (delete changed paths, re-chunk); repo-scoped retriever
+2. **Phase 3 — AI Foundation**
+3. **Phase 4 — Chat**
+4. **Phase 5 — PR Review**
+5. **Phase 6 — Issue Analysis**
+6. **Phase 7 — Auto-PR**
+7. **Phase 8 — Evals**
+8. **Phase 9 — Polish**
 
 ## Open Questions
 
@@ -79,6 +76,11 @@ Phase 1 — GitHub App + Webhooks
   work is async Celery tasks. (PRD §4.2)
 - **Deterministic chunk ids** = `hash(repo + path + line-span)` — enables idempotent
   upsert so re-indexing is safe. (PRD §F2)
+- **DB-enforced timestamps** — `created_at`/`updated_at` are `timestamptz` with
+  `server_default=now()`; `updated_at` bumped by a Postgres `BEFORE UPDATE` trigger.
+  Surfaced during Phase 1 live testing (asyncpg rejected aware datetimes against the
+  original naive columns). The DB owns timestamp values, not the ORM. (architecture.md
+  §Storage Model)
 - **No web frontend in v1** — webhooks are HMAC-verified; the AI engine works
   standalone. UI is an explicit later phase. (PRD §1)
 
