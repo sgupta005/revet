@@ -2,11 +2,20 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from enum import Enum
 
+from sqlalchemy import Column, DateTime
 from sqlmodel import Field, SQLModel
 
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _tz_column() -> Column:
+    return Column(DateTime(timezone=True), nullable=False)
+
+
+def _tz_updated_column() -> Column:
+    return Column(DateTime(timezone=True), nullable=False, onupdate=_utcnow)
 
 
 class IndexingStatus(str, Enum):
@@ -26,7 +35,7 @@ class Installation(SQLModel, table=True):
     github_installation_id: int = Field(unique=True, index=True)
     account_login: str
     account_type: str  # "User" or "Organization"
-    created_at: datetime = Field(default_factory=_utcnow)
+    created_at: datetime = Field(default_factory=_utcnow, sa_column=_tz_column())
 
 
 class Repository(SQLModel, table=True):
@@ -35,8 +44,8 @@ class Repository(SQLModel, table=True):
     full_name: str = Field(unique=True, index=True)  # "owner/repo"
     github_repo_id: int
     indexing_status: IndexingStatus = Field(default=IndexingStatus.NOT_STARTED)
-    created_at: datetime = Field(default_factory=_utcnow)
-    updated_at: datetime = Field(default_factory=_utcnow)
+    created_at: datetime = Field(default_factory=_utcnow, sa_column=_tz_column())
+    updated_at: datetime = Field(default_factory=_utcnow, sa_column=_tz_updated_column())
 
 
 class Rule(SQLModel, table=True):
@@ -44,8 +53,8 @@ class Rule(SQLModel, table=True):
     installation_id: int = Field(foreign_key="installation.id", index=True)
     name: str
     body: str
-    created_at: datetime = Field(default_factory=_utcnow)
-    updated_at: datetime = Field(default_factory=_utcnow)
+    created_at: datetime = Field(default_factory=_utcnow, sa_column=_tz_column())
+    updated_at: datetime = Field(default_factory=_utcnow, sa_column=_tz_updated_column())
 
 
 class PullRequest(SQLModel, table=True):
@@ -56,8 +65,8 @@ class PullRequest(SQLModel, table=True):
     github_pr_number: int
     kind: PRKind
     state: str
-    created_at: datetime = Field(default_factory=_utcnow)
-    updated_at: datetime = Field(default_factory=_utcnow)
+    created_at: datetime = Field(default_factory=_utcnow, sa_column=_tz_column())
+    updated_at: datetime = Field(default_factory=_utcnow, sa_column=_tz_updated_column())
 
 
 class Issue(SQLModel, table=True):
@@ -65,5 +74,5 @@ class Issue(SQLModel, table=True):
     repo_id: int = Field(foreign_key="repository.id", index=True)
     github_issue_number: int
     state: str
-    created_at: datetime = Field(default_factory=_utcnow)
-    updated_at: datetime = Field(default_factory=_utcnow)
+    created_at: datetime = Field(default_factory=_utcnow, sa_column=_tz_column())
+    updated_at: datetime = Field(default_factory=_utcnow, sa_column=_tz_updated_column())
