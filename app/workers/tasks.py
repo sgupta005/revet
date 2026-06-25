@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from app.workers.celery_app import celery_app
@@ -5,18 +6,20 @@ from app.workers.celery_app import celery_app
 logger = logging.getLogger(__name__)
 
 
-@celery_app.task(name="index_repo")
+@celery_app.task(
+    name="index_repo",
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_kwargs={"max_retries": 3},
+)
 def index_repo(
     repo_full_name: str,
     installation_id: int,
     changed_paths: list[str] | None = None,
 ) -> None:
-    logger.info(
-        "index_repo queued repo=%s installation=%s changed=%s",
-        repo_full_name,
-        installation_id,
-        changed_paths,
-    )
+    from ai.indexing.pipeline import run_index
+
+    asyncio.run(run_index(repo_full_name, installation_id, changed_paths))
 
 
 @celery_app.task(name="review_pr")

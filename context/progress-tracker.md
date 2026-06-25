@@ -4,11 +4,11 @@ Update this file after every meaningful implementation change.
 
 ## Current Phase
 
-Phase 1 — Complete
+Phase 2 — Complete
 
 ## Current Goal
 
-Phase 2 — Indexing
+Phase 3 — AI Foundation
 
 ## Completed
 
@@ -33,6 +33,18 @@ Phase 2 — Indexing
   - `app/workers/tasks.py` — stub tasks `index_repo`, `review_pr`, `analyze_issue`, `auto_pr` (log only; graphs land in later phases)
   - `app/main.py` — router wired via `include_router`
   - Verified end-to-end with TestClient: bad signature → `401`, valid PR webhook → `200` + `review_pr` enqueued, redelivered delivery-id deduped, unhandled event → `200`; RS256 JWT mint/verify round-trips
+- **Phase 2 — Indexing** (2026-06-21)
+  - `ai/llm.py` — `make_embeddings()` + cached `get_embeddings()` (`OpenAIEmbeddings`, `text-embedding-3-small`)
+  - `ai/vectorstore.py` — `PGVector` factory (collection `code_chunks`, 1536-dim, `postgresql+psycopg://`), `get_vectorstore()` singleton for sync/chat, `delete_paths()` (raw SQL on `langchain_pg_embedding.cmetadata`) for incremental re-index
+  - `ai/retriever.py` — `get_retriever(repo)` always passes `filter={"repo": repo}` (invariant #6)
+  - `ai/indexing/languages.py` — extension/filename → language map (18 languages), skip dirs/lockfiles/>100 KB filter, lazy per-language `tree-sitter` grammar loader
+  - `ai/indexing/chunker.py` — Tree-sitter function/class-aware chunking (per-language definition node types, module-glue grouping, decorated-def unwrap, oversized-chunk line splitting), whole-file fallback, deterministic `chunk_id = sha1(repo:path:start-end)`
+  - `app/github/files.py` — default branch, recursive tree (indexable blobs), blob + contents fetch with base64 decode + binary/size guards
+  - `ai/indexing/pipeline.py` — `run_index()`: status `INDEXING → COMPLETED|FAILED`, full index (tree → concurrent blob fetch → chunk → batched embed/upsert) and incremental (`delete_paths` changed paths → re-fetch survivors → upsert); builds own engine/embeddings/PGVector per run and disposes (prefork-safe)
+  - `app/db/session.py` — `build_engine()` per-task engine factory; `index_repo` task now runs `asyncio.run(run_index(...))` with `autoretry_for`/`retry_backoff`
+  - Grammars: standard `tree_sitter` + one `tree-sitter-<lang>` package per programming language (rejected the bundled `tree-sitter-language-pack==1.9.1` — its Python 3.14 binding diverges from py-tree-sitter)
+  - Verified against live Postgres+pgvector with a fake embedder + mocked GitHub: chunker output across Python/Go/Rust/C/JSON/MD; idempotent deterministic-id upsert; repo-scoped retrieval filter; full + incremental index (delete-by-path, removed-file handling); status `NOT_STARTED→COMPLETED` and `→FAILED` (re-raised for Celery retry)
+  - Enhancements adopted after reviewing an external indexing design: chunks are embedded as a context-enriched string (`embedding_text()`: `File: <path>` + `<type>: <name>` header + fenced code) rather than raw code, improving retrieval/grounding; `is_indexable` now skips minified bundles (`.min.` in filename). (Rejected from that design: Qdrant, Inngest, per-chunk embedding, frontend-POST status — all conflict with our mandated stack; the per-repo payload index is already provided by `langchain_postgres`' auto-created `ix_cmetadata_gin`.)
 
 ## In Progress
 
@@ -40,17 +52,14 @@ Phase 2 — Indexing
 
 ## Next Up
 
-1. **Phase 2 — Indexing**
-   - Tree-sitter chunker; OpenAI embeddings; pgvector upsert (deterministic ids)
-   - `index_repo` task: status transitions `NOT_STARTED → INDEXING → COMPLETED | FAILED`
-   - Incremental re-index on push (delete changed paths, re-chunk); repo-scoped retriever
-2. **Phase 3 — AI Foundation**
-3. **Phase 4 — Chat**
-4. **Phase 5 — PR Review**
-5. **Phase 6 — Issue Analysis**
-6. **Phase 7 — Auto-PR**
-7. **Phase 8 — Evals**
-8. **Phase 9 — Polish**
+1. **Phase 3 — AI Foundation**
+   - Add `get_chat_model` (`init_chat_model`) to `ai/llm.py`; `ai/tools.py`, `ai/schemas.py`, `ai/checkpointer.py`
+2. **Phase 4 — Chat**
+3. **Phase 5 — PR Review**
+4. **Phase 6 — Issue Analysis**
+5. **Phase 7 — Auto-PR**
+6. **Phase 8 — Evals**
+7. **Phase 9 — Polish**
 
 ## Open Questions
 
@@ -76,6 +85,17 @@ Phase 2 — Indexing
   work is async Celery tasks. (PRD §4.2)
 - **Deterministic chunk ids** = `hash(repo + path + line-span)` — enables idempotent
   upsert so re-indexing is safe. (PRD §F2)
+- **Standard `tree_sitter` + per-language grammar packages** — one
+  `tree-sitter-<lang>` package per programming language driving the standard
+  `Parser`/`Language`/`node.type` API, rather than the bundled
+  `tree-sitter-language-pack`. The latter (v1.9.1) ships its own native binding
+  whose API (`node.kind`, callable `root_node`) diverges from py-tree-sitter on
+  Python 3.14, so it was rejected. Data/markup languages have no grammar and use
+  whole-file chunks. (architecture.md §Boundaries)
+- **Per-task engine/clients in the indexing pipeline** — `run_index` builds its
+  own DB engine (`build_engine()`), embeddings, and PGVector per invocation and
+  disposes them, because Celery prefork tasks call `asyncio.run()` per run and the
+  module-level async engine would bind connections to a closed loop. (invariant #3)
 - **DB-enforced timestamps** — `created_at`/`updated_at` are `timestamptz` with
   `server_default=now()`; `updated_at` bumped by a Postgres `BEFORE UPDATE` trigger.
   Surfaced during Phase 1 live testing (asyncpg rejected aware datetimes against the

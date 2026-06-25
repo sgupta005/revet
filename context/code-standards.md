@@ -13,6 +13,7 @@
 
 - Python 3.13; use `asyncio` throughout the AI layer.
 - Strict typing — annotate all function signatures; avoid `Any`.
+- Every function must have a docstring. Keep it short: one sentence stating what the function does, plus a note on any non-obvious invariant or design decision (e.g. why an id is deterministic, what gets flushed and when).
 - Use Pydantic v2 models for all structured data crossing system boundaries (webhook payloads, LLM outputs via `with_structured_output`, API responses).
 - SQLModel for ORM models; schema created via `metadata.create_all()` at startup.
 - Prefer dataclasses or named tuples for internal-only value objects; reserve SQLModel/Pydantic for boundary types.
@@ -68,6 +69,7 @@ class RelevanceGrade(BaseModel):
 ## Embeddings and Vector Store
 
 - Model: `text-embedding-3-small` (1536-dim) via `OpenAIEmbeddings`.
+- Embed a context-enriched string, not raw code: a `File: <path>` + `<type>: <name>` header followed by the fenced snippet (`embedding_text()`). The same string is stored as the document and returned to the LLM, so retrieval and grounding both carry path/symbol context.
 - Batch embedding calls to control cost/latency; do not embed one chunk at a time.
 - Deterministic chunk id = `hash(repo + path + line-span)` — upsert, never insert blindly.
 - Metadata per chunk: `{repo, path, name, chunk_type, language, start_line, end_line}`.
@@ -82,10 +84,11 @@ class RelevanceGrade(BaseModel):
 
 ## Indexing Pipeline
 
-- Implemented as a plain async pipeline inside the Celery task — deliberately not a LangGraph graph (no reasoning step; a graph here would be over-engineering).
-- Skip: lockfiles, binaries, vendored/build dirs, files > 100 KB.
+- Implemented as a plain async pipeline inside the Celery task — deliberately not a LangGraph graph (no reasoning step; a graph here would be over-engineering). `index_repo` calls `asyncio.run(run_index(...))`; the pipeline builds its own DB engine, embeddings, and PGVector per run (prefork-safe, invariant #3).
+- Skip: lockfiles, minified bundles (`.min.` in filename), binaries (extension allow-list + null-byte check), vendored/build dirs, files > 100 KB.
 - Languages: Python, JS/TS/TSX, Go, Java, Rust, Ruby, PHP, C/C++, C#, HTML, CSS, JSON, YAML, TOML, MD, Bash, SQL, Dockerfile.
-- Whole-file fallback when Tree-sitter produces no meaningful chunks.
+- Use the standard `tree_sitter` package (`Parser`/`Language`/`node.type`) with one `tree-sitter-<lang>` grammar package per language — not a bundled multi-language pack (its binding diverged from py-tree-sitter on Python 3.14).
+- Structural (function/class-aware) chunking runs for the programming languages with a loaded grammar; data/markup languages (JSON, YAML, TOML, MD, HTML, CSS) and any file whose grammar yields no definitions fall back to whole-file chunks. Oversized chunks are split into line windows under the embedding token limit.
 
 ## Observability
 

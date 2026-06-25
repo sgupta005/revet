@@ -38,12 +38,13 @@ GitHub App ──webhooks──▶ FastAPI ──verify HMAC, dedup, enqueue─�
 
 - `app/` — FastAPI application: webhook router, `/chat` endpoint, `/health`, startup
 - `app/workers/` — Celery app definition and task implementations (`index_repo`, `review_pr`, `analyze_issue`, `auto_pr`)
-- `app/github/` — GitHub App token minting, HMAC verification, REST API helpers
-- `app/db/` — SQLModel models, engine setup, session factory
+- `app/github/` — GitHub App token minting, HMAC verification, REST API helpers, repo file fetch (`files.py`: tree / blob / contents)
+- `app/db/` — SQLModel models, engine setup, session factory (`build_engine()` mints a throwaway engine per Celery task)
 - `ai/` — AI foundation and all LangGraph graphs
 - `ai/graphs/` — One file per feature graph: `chat.py`, `pr_review.py`, `issue_analysis.py`, `auto_pr.py`
-- `ai/llm.py` — `init_chat_model` + embeddings singleton
-- `ai/vectorstore.py` + `ai/retriever.py` — `langchain_postgres.PGVector` + repo-scoped retriever
+- `ai/llm.py` — `init_chat_model` + embeddings singleton (Phase 2 ships `get_embeddings`/`make_embeddings`; chat model lands in Phase 3)
+- `ai/vectorstore.py` + `ai/retriever.py` — `langchain_postgres.PGVector` (collection `code_chunks`, 1536-dim) + `delete_paths` + repo-scoped retriever
+- `ai/indexing/` — plain async indexing pipeline (not a graph): `languages.py` (extension→language, indexable filter, grammar loader), `chunker.py` (Tree-sitter function/class chunking + deterministic `chunk_id`), `pipeline.py` (fetch → chunk → embed → upsert, status transitions, incremental delete)
 - `ai/tools.py` — LangChain `@tool`s: `retrieve_code`, `read_file`, `grep_symbol`, `list_directory`, `get_file_tree`
 - `ai/schemas.py` — Pydantic models for `with_structured_output`: `ReviewFinding`, `FixPlan`, `RelevanceGrade`
 - `ai/checkpointer.py` — `AsyncPostgresSaver` factory
