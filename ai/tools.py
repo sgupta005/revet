@@ -1,9 +1,8 @@
 import httpx
-from langchain_core.documents import Document
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
-from ai.retriever import get_retriever
+from ai.retriever import format_doc, get_retriever
 from ai.vectorstore import get_vectorstore, search_symbol
 from app.github.auth import get_installation_token
 from app.github.constants import GITHUB_API
@@ -18,13 +17,6 @@ def _context(config: RunnableConfig) -> tuple[str, int, str | None]:
     return cfg["repo"], cfg["installation_id"], cfg.get("ref")
 
 
-def _format_doc(doc: Document) -> str:
-    """Render a retrieved chunk with its location header; page content already
-    carries the `File: <path>` / symbol context embedded at index time."""
-    m = doc.metadata
-    return f"[{m.get('path')}:{m.get('start_line')}-{m.get('end_line')}]\n{doc.page_content}"
-
-
 @tool
 async def retrieve_code(query: str, config: RunnableConfig) -> str:
     """Semantically search the indexed repository and return the most relevant
@@ -33,7 +25,7 @@ async def retrieve_code(query: str, config: RunnableConfig) -> str:
     docs = await get_retriever(repo).ainvoke(query)
     if not docs:
         return "No relevant code found."
-    return "\n\n---\n\n".join(_format_doc(d) for d in docs)
+    return "\n\n---\n\n".join(format_doc(d) for d in docs)
 
 
 @tool

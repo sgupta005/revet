@@ -4,11 +4,11 @@ Update this file after every meaningful implementation change.
 
 ## Current Phase
 
-Phase 3 — Complete
+Phase 4 — Complete
 
 ## Current Goal
 
-Phase 4 — Chat
+Phase 5 — PR Review
 
 ## Completed
 
@@ -56,24 +56,35 @@ Phase 4 — Chat
   - LangSmith tracing needs no code — already env-wired from Phase 0 (`LANGSMITH_TRACING=true`)
   - Verified by import: all modules load; tool schemas expose only model args (`config` hidden); `get_chat_model` builds `ChatOpenAI` (gpt-4o), caches per id, and supports `with_structured_output` + `bind_tools`; schemas validate
 
+- **Phase 4 — Chat** (2026-06-27)
+  - `ai/graphs/chat.py` — corrective + agentic RAG `StateGraph` matching the PRD shape: `retrieve → grade_documents → (relevant ▸ generate | weak ▸ rewrite_query → retrieve)`, then `generate → (tool_calls ▸ tools → generate | END)`. `grade_documents` uses `with_structured_output(RelevanceGrade)`; `generate` binds `[retrieve_code, read_file]` so it can read full files, not just chunks. State carries per-thread `messages` (memory), plus `query`/`rewrites` for the corrective loop.
+  - **Two bounded loops** (invariant #10): corrective rewrite loop capped at `MAX_REWRITES=2` (on cap, answers with what it has); agentic generate tool loop capped at `MAX_TOOL_ROUNDS=3` (on cap, `generate` drops tools so the turn always ends with a streamable text answer — never a dangling tool call).
+  - `ai/constants.py` — `MAX_REWRITES`, `MAX_TOOL_ROUNDS`, `GRADER_MODEL="openai:gpt-4o-mini"` (cheap model for grade/rewrite; generation uses default `settings.llm_model` = gpt-4o).
+  - `ai/retriever.py` — extracted `format_doc(doc)` (path:line header + page content); `ai/tools.py` now reuses it (removed its private duplicate).
+  - `ai/checkpointer.py` — added `setup_checkpointer()` (enters the saver context, runs idempotent `setup()` once at startup).
+  - `app/chat.py` — `POST /chat`: resolves repo → GitHub installation id (404 if app not installed) before streaming, builds `config.configurable` (`thread_id`, `repo`, `installation_id`), resets `query`/`rewrites` per turn so a checkpointed prior turn never leaks its rewritten query, then streams `graph.astream(..., stream_mode="messages")` filtered to the `generate` node's text chunks as SSE (`data: {"delta": ...}` JSON frames, terminal `{"done": true}`). Graph builder is module-level; each request compiles it against a per-request `checkpointer()` (own Postgres connection — safe under concurrent `/chat`, one event loop).
+  - `app/main.py` — included `chat_router`; lifespan now runs `setup_checkpointer()` after `create_db()`.
+  - Verified: all modules import; graph compiles and wiring matches the spec (edges + conditional routes); `_route_after_grade` returns rewrite when weak & under cap, generate at cap / when relevant. End-to-end `ainvoke` with fake retriever + fake model exercised the relevant path (0 rewrites → answer), the weak path (exactly 2 rewrites → answer), and empty-docs (graded weak, bounded, then answer). SSE encoder JSON-escapes newlines so multi-line tokens stay one frame. (Live OpenAI/Postgres run deferred — same as prior phases.)
+
 ## In Progress
 
 - None.
 
 ## Next Up
 
-1. **Phase 4 — Chat**
-2. **Phase 5 — PR Review**
-3. **Phase 6 — Issue Analysis**
-4. **Phase 7 — Auto-PR**
-5. **Phase 8 — Evals**
-6. **Phase 9 — Polish**
+1. **Phase 5 — PR Review**
+2. **Phase 6 — Issue Analysis**
+3. **Phase 7 — Auto-PR**
+4. **Phase 8 — Evals**
+5. **Phase 9 — Polish**
 
 ## Open Questions
 
-- **LLM model choice**: PRD defaults to `openai:gpt-4o` for the chat model; should
-  cheaper models (e.g. `gpt-4o-mini`) be used for graders and individual reviewers to
-  reduce cost? Document the decision when made.
+- **LLM model choice**: *Decided for chat (Phase 4)* — generation uses the default
+  `settings.llm_model` (gpt-4o); the document grader and query rewriter use the cheaper
+  `GRADER_MODEL=openai:gpt-4o-mini` (`ai/constants.py`). Still open for the PR-review
+  reviewers (Phase 5) — apply the same split (cheap per-reviewer model, capable aggregator)
+  unless evals show otherwise.
 - **Migrations**: v1 uses `create_all()`; note when the schema starts churning so we can
   adopt Alembic at the right time.
 - **Embedding dimensions**: PRD specifies `text-embedding-3-small` (1536-dim). If we
@@ -83,7 +94,7 @@ Phase 4 — Chat
   Phase 1 can be end-to-end tested.
 - **Tool vectorstore reuse under Celery**: `retrieve_code`/`grep_symbol` use the cached
   `get_vectorstore()` singleton (async engine). This is correct for `/chat` (synchronous,
-  one event loop). For the Celery graph tools (issue/PR/auto-PR, each `asyncio.run()`), the
+  one event loop) — *confirmed in Phase 4*. For the Celery graph tools (issue/PR/auto-PR, each `asyncio.run()`), the
   module-level async engine can bind to a closed loop (invariant #3) — when those graphs land
   (Phase 5–7) they must inject a per-task store/retriever via `config["configurable"]` or
   build one per run, like `run_index` does. Tools already read everything else from config, so
@@ -98,6 +109,17 @@ Phase 4 — Chat
   avoids a separate vector service. (PRD §3)
 - **Chat is synchronous, not queued** — latency matters; user is waiting. All other AI
   work is async Celery tasks. (PRD §4.2)
+- **Chat checkpointer is per-request, graph builder is module-level** — `build_chat_graph()`
+  builds the uncompiled graph once; each `/chat` request enters its own
+  `checkpointer()` context (its own Postgres connection) and compiles the builder against
+  it. Avoids sharing one psycopg connection across concurrent requests while keeping chat
+  memory durable per `thread_id`. A connection pool is a possible later optimization if
+  per-request connect latency matters. (Phase 4)
+- **Chat streaming filters by graph node** — `/chat` streams `stream_mode="messages"` and
+  emits only the `generate` node's text chunks, so grader/rewrite LLM tokens and the
+  generate loop's tool-call chunks (empty content) never reach the client. Each turn ends
+  with a real text answer because `generate` drops its tools once `MAX_TOOL_ROUNDS` is hit.
+  (Phase 4)
 - **Deterministic chunk ids** = `hash(repo + path + line-span)` — enables idempotent
   upsert so re-indexing is safe. (PRD §F2)
 - **Standard `tree_sitter` + per-language grammar packages** — one

@@ -19,3 +19,10 @@ def checkpointer() -> AbstractAsyncContextManager[AsyncPostgresSaver]:
     thread_id). Caller enters the context inside the task's
     event loop and runs `await saver.setup()` once before first use."""
     return AsyncPostgresSaver.from_conn_string(_conn_string())
+
+
+async def setup_checkpointer() -> None:
+    """Create the LangGraph checkpoint tables once at startup; `setup()` is
+    idempotent (CREATE TABLE IF NOT EXISTS) so per-request savers can skip it."""
+    async with checkpointer() as saver:
+        await saver.setup()
