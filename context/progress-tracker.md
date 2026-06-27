@@ -4,11 +4,11 @@ Update this file after every meaningful implementation change.
 
 ## Current Phase
 
-Phase 2 — Complete
+Phase 3 — Complete
 
 ## Current Goal
 
-Phase 3 — AI Foundation
+Phase 4 — Chat
 
 ## Completed
 
@@ -46,20 +46,28 @@ Phase 3 — AI Foundation
   - Verified against live Postgres+pgvector with a fake embedder + mocked GitHub: chunker output across Python/Go/Rust/C/JSON/MD; idempotent deterministic-id upsert; repo-scoped retrieval filter; full + incremental index (delete-by-path, removed-file handling); status `NOT_STARTED→COMPLETED` and `→FAILED` (re-raised for Celery retry)
   - Enhancements adopted after reviewing an external indexing design: chunks are embedded as a context-enriched string (`embedding_text()`: `File: <path>` + `<type>: <name>` header + fenced code) rather than raw code, improving retrieval/grounding; `is_indexable` now skips minified bundles (`.min.` in filename). (Rejected from that design: Qdrant, Inngest, per-chunk embedding, frontend-POST status — all conflict with our mandated stack; the per-repo payload index is already provided by `langchain_postgres`' auto-created `ix_cmetadata_gin`.)
 
+- **Phase 3 — AI Foundation** (2026-06-27)
+  - `ai/llm.py` — added `make_chat_model()` + cached `get_chat_model(model=None)` (`init_chat_model`, provider-prefixed id from `settings.llm_model`); cache is keyed per model id so a cheaper id (e.g. `openai:gpt-4o-mini`) for graders/reviewers is a one-arg call
+  - `ai/schemas.py` — Pydantic v2 `with_structured_output` shapes: `ReviewFinding` (severity `Literal`, confidence 0–1), `FixPlan` + `FixFile` (action `Literal[create|update|delete]`), `RelevanceGrade`
+  - `ai/checkpointer.py` — `checkpointer()` returns the `AsyncPostgresSaver.from_conn_string(...)` async context manager; `_conn_string()` strips any SQLAlchemy `+driver` suffix (psycopg opens its own connection); caller enters it inside the task loop and runs `await saver.setup()` once
+  - `ai/tools.py` — five LangChain `@tool`s + `CODEBASE_TOOLS`: `retrieve_code`, `read_file`, `grep_symbol`, `list_directory`, `get_file_tree`. Repo context (`repo`, `installation_id`, `ref`) is injected via `config["configurable"]` (a `RunnableConfig` param hidden from the model schema), never model-supplied — keeps retrieval repo-scoped (invariant #6). File/dir/tree reads use the installation token + GitHub REST at the configured ref (default branch when unset)
+  - `app/github/files.py` — added `list_tree()` (all blob paths, unfiltered) and `list_dir()` (`(name, type)` entries; `[]` when path is a file/missing) for the navigation tools
+  - `ai/vectorstore.py` — added `search_symbol()` (repo-scoped `ILIKE` over `cmetadata->>'name'`) backing `grep_symbol`
+  - LangSmith tracing needs no code — already env-wired from Phase 0 (`LANGSMITH_TRACING=true`)
+  - Verified by import: all modules load; tool schemas expose only model args (`config` hidden); `get_chat_model` builds `ChatOpenAI` (gpt-4o), caches per id, and supports `with_structured_output` + `bind_tools`; schemas validate
+
 ## In Progress
 
 - None.
 
 ## Next Up
 
-1. **Phase 3 — AI Foundation**
-   - Add `get_chat_model` (`init_chat_model`) to `ai/llm.py`; `ai/tools.py`, `ai/schemas.py`, `ai/checkpointer.py`
-2. **Phase 4 — Chat**
-3. **Phase 5 — PR Review**
-4. **Phase 6 — Issue Analysis**
-5. **Phase 7 — Auto-PR**
-6. **Phase 8 — Evals**
-7. **Phase 9 — Polish**
+1. **Phase 4 — Chat**
+2. **Phase 5 — PR Review**
+3. **Phase 6 — Issue Analysis**
+4. **Phase 7 — Auto-PR**
+5. **Phase 8 — Evals**
+6. **Phase 9 — Polish**
 
 ## Open Questions
 
@@ -73,6 +81,13 @@ Phase 3 — AI Foundation
   schema change.
 - **GitHub App registration**: App ID and private key must be registered in GitHub before
   Phase 1 can be end-to-end tested.
+- **Tool vectorstore reuse under Celery**: `retrieve_code`/`grep_symbol` use the cached
+  `get_vectorstore()` singleton (async engine). This is correct for `/chat` (synchronous,
+  one event loop). For the Celery graph tools (issue/PR/auto-PR, each `asyncio.run()`), the
+  module-level async engine can bind to a closed loop (invariant #3) — when those graphs land
+  (Phase 5–7) they must inject a per-task store/retriever via `config["configurable"]` or
+  build one per run, like `run_index` does. Tools already read everything else from config, so
+  this is an additive change with no tool-signature churn.
 
 ## Architecture Decisions
 

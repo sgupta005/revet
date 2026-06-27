@@ -73,6 +73,38 @@ async def get_blob(
     return RepoFile(path=path, content=text)
 
 
+async def list_tree(
+    client: httpx.AsyncClient, repo: str, branch: str, token: str
+) -> list[str]:
+    """Return every file path in the repo tree (unfiltered) for agent navigation."""
+    resp = await client.get(
+        f"/repos/{repo}/git/trees/{branch}",
+        params={"recursive": "1"},
+        headers=_headers(token),
+    )
+    resp.raise_for_status()
+    return [e["path"] for e in resp.json()["tree"] if e["type"] == "blob"]
+
+
+async def list_dir(
+    client: httpx.AsyncClient, repo: str, path: str, ref: str, token: str
+) -> list[tuple[str, str]]:
+    """Return `(name, type)` entries under a directory; empty when the path is a
+    file or missing (Contents API returns an object, not a list, for files)."""
+    resp = await client.get(
+        f"/repos/{repo}/contents/{path}",
+        params={"ref": ref},
+        headers=_headers(token),
+    )
+    if resp.status_code == 404:
+        return []
+    resp.raise_for_status()
+    payload = resp.json()
+    if not isinstance(payload, list):
+        return []
+    return [(e["name"], e["type"]) for e in payload]
+
+
 async def get_file(
     client: httpx.AsyncClient, repo: str, path: str, ref: str, token: str
 ) -> RepoFile | None:

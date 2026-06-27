@@ -42,3 +42,23 @@ async def delete_paths(store: PGVector, repo: str, paths: Sequence[str]) -> None
     async with store._make_async_session() as session:
         await session.execute(stmt, {"repo": repo, "paths": list(paths)})
         await session.commit()
+
+
+async def search_symbol(
+    store: PGVector, repo: str, name: str, limit: int = 25
+) -> list[tuple[str, int, int, str, str]]:
+    """Return `(path, start_line, end_line, chunk_type, name)` for indexed
+    definitions in the repo whose name matches `name` (case-insensitive
+    substring); repo-scoped like every other read (invariant #6)."""
+    stmt = text(
+        "SELECT cmetadata->>'path', (cmetadata->>'start_line')::int, "
+        "(cmetadata->>'end_line')::int, cmetadata->>'chunk_type', cmetadata->>'name' "
+        f"FROM {EMBEDDING_TABLE} "
+        "WHERE cmetadata->>'repo' = :repo AND cmetadata->>'name' ILIKE :pattern "
+        "ORDER BY cmetadata->>'path' LIMIT :limit"
+    )
+    async with store._make_async_session() as session:
+        result = await session.execute(
+            stmt, {"repo": repo, "pattern": f"%{name}%", "limit": limit}
+        )
+        return [tuple(row) for row in result.all()]
