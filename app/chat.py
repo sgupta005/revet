@@ -11,6 +11,7 @@ from sqlmodel import select
 
 from ai.checkpointer import checkpointer
 from ai.graphs.chat import build_chat_graph
+from app.auth.dependencies import AuthedUser, get_current_user, verify_installation_access
 from app.db.models import Installation, Repository
 from app.db.session import get_session
 
@@ -51,12 +52,16 @@ async def _installation_id(session: AsyncSession, repo: str) -> int:
 
 @router.post("/chat")
 async def chat(
-    req: ChatRequest, session: AsyncSession = Depends(get_session)
+    req: ChatRequest,
+    session: AsyncSession = Depends(get_session),
+    authed: AuthedUser = Depends(get_current_user),
 ) -> StreamingResponse:
     """Stream a grounded, memory-backed answer over the repo's semantic index via
-    SSE; the only synchronous AI path (invariant #2). Resolves the installation
-    before streaming so a missing repo fails fast with 404, not mid-stream."""
+    SSE; the only synchronous AI path (invariant #2). Session-gated and access-checked
+    (invariant #13): resolves the installation before streaming so a missing repo fails
+    fast with 404 and an unauthorized one with 403, not mid-stream."""
     installation_id = await _installation_id(session, req.repo)
+    await verify_installation_access(authed, installation_id)
     thread_id = req.thread_id or str(uuid.uuid4())
     config = {
         "configurable": {

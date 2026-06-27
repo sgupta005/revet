@@ -15,6 +15,13 @@ class Settings(BaseSettings):
     github_app_private_key: str  # PEM with literal \n
     github_webhook_secret: str
 
+    # Phase 5 — user-to-server OAuth + sessions (frontend auth). The OAuth secret
+    # is backend-only and never exposed; the browser holds only an opaque session.
+    github_oauth_client_id: str
+    github_oauth_client_secret: str
+    frontend_origin: str = "http://localhost:3000"
+    session_ttl: int = 7 * 24 * 3600  # session lifetime in seconds
+
     langsmith_tracing: bool = False
     langsmith_api_key: str = ""
     langsmith_project: str = "revet"

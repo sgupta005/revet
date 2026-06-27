@@ -44,6 +44,17 @@ async def delete_paths(store: PGVector, repo: str, paths: Sequence[str]) -> None
         await session.commit()
 
 
+async def count_chunks(store: PGVector, repo: str) -> int:
+    """Number of indexed code chunks for a repo; repo-scoped (invariant #6).
+    Surfaced alongside `indexing_status` so the frontend can show index size."""
+    stmt = text(
+        f"SELECT count(*) FROM {EMBEDDING_TABLE} WHERE cmetadata->>'repo' = :repo"
+    )
+    async with store._make_async_session() as session:
+        result = await session.execute(stmt, {"repo": repo})
+        return int(result.scalar_one())
+
+
 async def search_symbol(
     store: PGVector, repo: str, name: str, limit: int = 25
 ) -> list[tuple[str, int, int, str, str]]:

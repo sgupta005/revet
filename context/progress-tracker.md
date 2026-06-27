@@ -4,11 +4,11 @@ Update this file after every meaningful implementation change.
 
 ## Current Phase
 
-Phase 4 — Complete
+Phase 5 — Complete
 
 ## Current Goal
 
-Phase 5 — PR Review
+Phase 6 — PR Review (multi-agent fan-out graph → posted review + activity row).
 
 ## Completed
 
@@ -66,24 +66,75 @@ Phase 5 — PR Review
   - `app/main.py` — included `chat_router`; lifespan now runs `setup_checkpointer()` after `create_db()`.
   - Verified: all modules import; graph compiles and wiring matches the spec (edges + conditional routes); `_route_after_grade` returns rewrite when weak & under cap, generate at cap / when relevant. End-to-end `ainvoke` with fake retriever + fake model exercised the relevant path (0 rewrites → answer), the weak path (exactly 2 rewrites → answer), and empty-docs (graded weak, bounded, then answer). SSE encoder JSON-escapes newlines so multi-line tokens stay one frame. (Live OpenAI/Postgres run deferred — same as prior phases.)
 
+- **Phase 5 — Auth & Frontend API** (2026-06-27)
+  - `app/config.py` — added `github_oauth_client_id`, `github_oauth_client_secret`
+    (backend-only, never exposed), `frontend_origin` (CORS), `session_ttl`; documented in
+    `env.template`.
+  - `app/db/models.py` — `User` table (durable identity: `github_id` unique, `login`,
+    `avatar_url`); user/refresh tokens deliberately **not** stored here (they live only in
+    the Redis session, invariant #12).
+  - `app/github/oauth.py` — user-to-server helpers (httpx): `exchange_code` /
+    `refresh_user_token` (POST `github.com/login/oauth/access_token`, secret from env),
+    `get_authenticated_user` (`GET /user`), `list_user_installations`
+    (`GET /user/installations`), `list_installation_repositories`
+    (`GET /user/installations/{id}/repositories`, paginated). Boundary shapes are Pydantic
+    (`OAuthTokens`, `GitHubIdentity`, `GitHubInstallation`, `GitHubRepo`); `OAuthError` for
+    a GitHub `error` response. `refresh_token`/`expires_in` default empty so it also works
+    in the App's non-expiring-token mode.
+  - `app/auth/sessions.py` — Redis session store: `create_session` (opaque
+    `secrets.token_urlsafe` token → `{user_id, user_token, refresh_token}`, TTL
+    `settings.session_ttl`), `get_session`, `update_session_tokens` (persist a refresh),
+    `delete_session`. Tokens never leave the backend.
+  - `app/auth/dependencies.py` — `get_current_user` (cookie `session` **or**
+    `Authorization: Bearer` → Redis → `User`; `401` if missing/invalid) returning an
+    `AuthedUser`; `user_installations` (cached in Redis, `USER_CACHE_TTL=300`);
+    `verify_installation_access` (`403` unless the GitHub installation id is in the user's
+    list — invariant #13); `call_with_refresh` (runs a user-token call, refreshes the token
+    once on a `401` and persists it, else surfaces the `401` as a re-login).
+  - `app/api.py` — user-facing router (separate from the webhook router): `POST /auth/session`
+    (exchange → upsert `User` → create session → `{session_token, user}`; only the opaque
+    token reaches the browser), `POST /auth/logout`, `GET /me`,
+    `GET /installations/{installation_id}/repositories` (access-checked; the user's live repos
+    joined with stored `Repository.indexing_status`, `NOT_STARTED` when unindexed; `?refresh=1`
+    bypasses the Redis repo cache), `POST /repos/{owner}/{repo}/index` (access-checked;
+    enqueues the existing `index_repo`), `GET /repos/{owner}/{repo}/index-status`
+    (access-checked; `indexing_status` + `chunk_count`).
+  - `ai/vectorstore.py` — added `count_chunks(store, repo)` (repo-scoped `count(*)` over
+    `langchain_pg_embedding`) backing index-status.
+  - `app/chat.py` — `/chat` now depends on `get_current_user` and runs
+    `verify_installation_access` on the resolved installation before streaming
+    (session-gated + access-checked, invariant #13).
+  - `app/main.py` — `CORSMiddleware` (allow `FRONTEND_ORIGIN`, credentials on, configured
+    once) + `include_router(api_router)`.
+  - Verified by import (all modules load, 8 user-facing routes register) and with mocked
+    GitHub: session create/get/update/delete; access check allows owned installation,
+    caches the installations list (one GitHub call), `403`s a foreign one; `call_with_refresh`
+    refreshes once on a `401` and retries with the new token; full `TestClient` flow —
+    gated route `401` without a session, `POST /auth/session` returns `{session_token, user}`
+    with **no user/refresh token in the body**, `GET /me` lists installations, `POST /auth/logout`
+    → subsequent `/me` `401`. (Live GitHub OAuth/Postgres run deferred — App needs OAuth
+    enabled + a registered client secret, same as prior phases.)
+  - Note: appended placeholder `GITHUB_OAUTH_CLIENT_ID`/`_SECRET`/`FRONTEND_ORIGIN`/`SESSION_TTL`
+    to the local `.env` so the service boots; real values must be filled before live OAuth.
+
 ## In Progress
 
 - None.
 
 ## Next Up
 
-1. **Phase 5 — PR Review**
-2. **Phase 6 — Issue Analysis**
-3. **Phase 7 — Auto-PR**
-4. **Phase 8 — Evals**
-5. **Phase 9 — Polish**
+1. **Phase 6 — PR Review**
+2. **Phase 7 — Issue Analysis**
+3. **Phase 8 — Auto-PR**
+4. **Phase 9 — Evals**
+5. **Phase 10 — Polish**
 
 ## Open Questions
 
 - **LLM model choice**: *Decided for chat (Phase 4)* — generation uses the default
   `settings.llm_model` (gpt-4o); the document grader and query rewriter use the cheaper
   `GRADER_MODEL=openai:gpt-4o-mini` (`ai/constants.py`). Still open for the PR-review
-  reviewers (Phase 5) — apply the same split (cheap per-reviewer model, capable aggregator)
+  reviewers (Phase 6) — apply the same split (cheap per-reviewer model, capable aggregator)
   unless evals show otherwise.
 - **Migrations**: v1 uses `create_all()`; note when the schema starts churning so we can
   adopt Alembic at the right time.
@@ -92,16 +143,42 @@ Phase 5 — PR Review
   schema change.
 - **GitHub App registration**: App ID and private key must be registered in GitHub before
   Phase 1 can be end-to-end tested.
+- **OAuth config (Phase 5)**: the GitHub App needs *"Request user authorization (OAuth)
+  during installation"* enabled, a Callback URL, and an OAuth client secret
+  (`GITHUB_OAUTH_CLIENT_ID`/`GITHUB_OAUTH_CLIENT_SECRET`) before auth can be tested.
+- **User-token lifetime (Phase 5)**: *Implemented (default).* `call_with_refresh`
+  (`app/auth/dependencies.py`) refreshes the user token once on a `401` from a user-token
+  call and persists it to the session; with no refresh token (the App's non-expiring mode)
+  the `401` surfaces as a re-login. Works either way — confirm the App's token-expiry
+  setting when OAuth is registered.
+- **Session/user-token storage (Phase 5)**: *Decided & implemented.* Sessions live in
+  **Redis** keyed by an opaque `session_token`; the `User` row holds only durable identity
+  (`github_id`, `login`, `avatar_url`). Refresh tokens live **in the Redis session**, not on
+  the `User` row — a session is the unit of token lifetime, and keeping tokens out of the
+  relational row avoids encrypted-at-rest token columns (invariant #12). Revisit only if
+  cross-session token reuse is ever needed.
+- **Callback placement (Phase 5)**: *Backend-agnostic.* `get_current_user` reads the session
+  token from either a `session` cookie or `Authorization: Bearer`, so both the
+  forward-the-code (frontend owns the cookie) and shared-parent-domain (backend sets the
+  cookie) deploys work without backend changes. Still a frontend/deploy decision for where the
+  cookie is set.
 - **Tool vectorstore reuse under Celery**: `retrieve_code`/`grep_symbol` use the cached
   `get_vectorstore()` singleton (async engine). This is correct for `/chat` (synchronous,
   one event loop) — *confirmed in Phase 4*. For the Celery graph tools (issue/PR/auto-PR, each `asyncio.run()`), the
   module-level async engine can bind to a closed loop (invariant #3) — when those graphs land
-  (Phase 5–7) they must inject a per-task store/retriever via `config["configurable"]` or
+  (Phase 6–8) they must inject a per-task store/retriever via `config["configurable"]` or
   build one per run, like `run_index` does. Tools already read everything else from config, so
   this is an additive change with no tool-signature churn.
 
 ## Architecture Decisions
 
+- **Access check is a plain function, not a FastAPI dependency** — `verify_installation_access`
+  is `await`-ed inside each handler rather than wired as `Depends`, because the
+  `installation_id` comes from a path param on `/installations/{id}/...` but is *derived from
+  the repo* (DB lookup) on `/repos/{owner}/{repo}/...` and `/chat`. A single uniform
+  dependency can't cover both sources, so the check stays an explicit first line in every
+  installation/repo handler (still uniform, still invariant #13). Only `get_current_user`
+  (no parameters) is a dependency. (Phase 5)
 - **Indexing is a plain async pipeline, not a LangGraph graph** — no reasoning step
   needed; adding a graph would be over-engineering. (PRD §F2)
 - **Single Postgres for everything** — relational data, pgvector embeddings, and
@@ -138,8 +215,17 @@ Phase 5 — PR Review
   Surfaced during Phase 1 live testing (asyncpg rejected aware datetimes against the
   original naive columns). The DB owns timestamp values, not the ORM. (architecture.md
   §Storage Model)
-- **No web frontend in v1** — webhooks are HMAC-verified; the AI engine works
-  standalone. UI is an explicit later phase. (PRD §1)
+- **Web frontend added; auth is now Phase 5** *(2026-06-27, supersedes "no web frontend
+  in v1")* — a Next.js frontend (`../revet_fe`) now consumes the backend. To serve it the
+  backend gains a **user-auth layer**: GitHub **OAuth** (the GitHub App's user-to-server
+  tokens) backed by a **Redis session**, plus session-gated, access-checked user-facing
+  REST endpoints (`/auth/*`, `/me`, `/installations/.../repositories`, repo index/status,
+  and a gated `/chat`). This is **lightweight GitHub-only identity** — no passwords, no
+  separate accounts system. The **dual-token model** is the core idea: the existing
+  **installation token** still does all repo work; the new **user token** only answers
+  "who is looking and what can they access" and authorizes requests. The GitHub App must
+  enable *"Request user authorization (OAuth) during installation"* and have an OAuth
+  client secret. Full contract: `revet_fe/context/github-integration.md`.
 
 ## Session Notes
 

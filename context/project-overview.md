@@ -7,8 +7,9 @@ repository, it reviews pull requests with a structured multi-perspective review,
 analyzes new issues with code-aware comments, auto-generates fix PRs from labeled
 issues, and lets users chat with their codebase via a semantic index. Every
 codebase-aware capability is powered by Tree-sitter chunking + pgvector embeddings
-orchestrated with LangGraph/LangChain. v1 ships as a single backend service — no
-web UI.
+orchestrated with LangGraph/LangChain. The core engine is a single backend service;
+a separate Next.js frontend (`../revet_fe`) consumes it over a session-gated REST/SSE
+API (added in Phase 5 — GitHub OAuth + user-facing endpoints).
 
 ## Goals
 
@@ -77,10 +78,23 @@ web UI.
 - Eval harness (`evals/`) with golden datasets + `langsmith.evaluate` + LLM-as-judge
 - Evaluators: review usefulness, retrieval relevance, auto-PR plan correctness
 
+### User Auth & Frontend API (F9) — *added for the web frontend (`../revet_fe`)*
+- **GitHub OAuth** (the GitHub App's user-to-server tokens) → lightweight GitHub-only
+  identity (no passwords, no separate accounts). `POST /auth/session` exchanges the OAuth
+  `code` for a user token, upserts a `User`, and creates a **Redis session**; `POST /auth/logout` ends it.
+- **Dual-token model**: the **installation token** still does all repo work; the **user
+  token** only resolves identity and access (`GET /user`, `GET /user/installations`).
+- **Session-gated, access-checked REST**: `GET /me`, `GET /installations/{id}/repositories`
+  (+ indexing status), `POST /repos/{owner}/{repo}/index`, `GET /repos/{owner}/{repo}/index-status`,
+  and a now-gated `/chat`. Every installation/repo call verifies the user can access it.
+- **CORS** for the frontend origin (credentialed). Full contract:
+  `../revet_fe/context/github-integration.md`.
+
 ## Scope
 
 ### In Scope
 - FastAPI webhook intake + `/chat` (streaming SSE) + `/health`
+- *(Phase 5)* User-facing REST API + GitHub OAuth sign-in + Redis sessions for the web frontend
 - Celery background jobs: `index_repo`, `review_pr`, `analyze_issue`, `auto_pr`
 - LangGraph graphs for each AI feature
 - Postgres + pgvector (embeddings + relational data + LangGraph checkpointer)
@@ -89,7 +103,8 @@ web UI.
 - LangSmith tracing + evaluation harness
 
 ### Out of Scope (v1)
-- Web frontend, user accounts, authentication
+- Passwords / email accounts / any identity provider other than GitHub (auth is the
+  lightweight GitHub OAuth of F9; the web UI itself lives in the separate `../revet_fe` repo)
 - Billing / subscriptions / plan limits
 - Real-time notifications / inbox
 - Org-wide policy, fine-grained RBAC, multi-tenant scale hardening

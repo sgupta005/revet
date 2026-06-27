@@ -17,14 +17,19 @@ ones (indexing must precede all AI features).
 | **2. Indexing** | Tree-sitter chunker; embeddings; pgvector upsert (deterministic ids); incremental re-index on push; status transitions; retriever. |
 | **3. AI Foundation** | `llm.py`, `tools.py`, `schemas.py`, `checkpointer.py`; LangSmith tracing on. |
 | **4. Chat** | Corrective + agentic RAG graph + streaming `/chat` (validates the foundation early). |
-| **5. PR Review** | Multi-agent fan-out graph → posted review + activity row. |
-| **6. Issue Analysis** | Agentic-RAG graph → comment + activity row. |
-| **7. Auto-PR** | Plan→generate→commit graph → PR + link comment (label-gated). |
-| **8. Evals** | Golden datasets + `langsmith.evaluate` + LLM-as-judge for review & chat. |
-| **9. Polish** | Celery retries/backoff + dead-letter; structured logging; Flower; README + diagram. |
+| **5. Auth & Frontend API** | GitHub OAuth (user-to-server) + Redis session; `get_current_user` + per-request installation access checks; session-gated user-facing REST (`/auth/*`, `/me`, `/installations/{id}/repositories`, repo index + status, gated `/chat`); CORS for the frontend. **Enables the `../revet_fe` web frontend.** |
+| **6. PR Review** | Multi-agent fan-out graph → posted review + activity row. |
+| **7. Issue Analysis** | Agentic-RAG graph → comment + activity row. |
+| **8. Auto-PR** | Plan→generate→commit graph → PR + link comment (label-gated). |
+| **9. Evals** | Golden datasets + `langsmith.evaluate` + LLM-as-judge for review & chat. |
+| **10. Polish** | Celery retries/backoff + dead-letter; structured logging; Flower; README + diagram. |
 
-Phase 2 (Indexing) must precede Phases 4–7 (all AI features depend on the vector index).
-Phase 3 (AI Foundation) must precede Phases 4–7 (shared building blocks).
+Phase 2 (Indexing) must precede Phases 4–8 (all AI features depend on the vector index).
+Phase 3 (AI Foundation) must precede Phases 4–8 (shared building blocks).
+Phase 5 (Auth & Frontend API) is a webhook/REST + session concern, independent of the AI
+graphs — it can land before or alongside Phases 6–8, but is sequenced **next** because
+the frontend depends on it. Its contract is defined in
+`../revet_fe/context/github-integration.md` and `architecture.md` §Backend API contract.
 
 ## Scoping Rules
 
@@ -57,6 +62,9 @@ Do not change the following without explicit instruction:
 - The `X-Hub-Signature-256` HMAC verification step — it must always run first in webhook handlers.
 - Deterministic chunk id scheme (`hash(repo + path + line-span)`) — changing it invalidates the index.
 - The repo-scope filter on every retrieval call — cross-repo leakage is a correctness bug.
+- *(Phase 5)* `get_current_user` + `verify_installation_access` on every user-facing
+  installation/repo endpoint — never trust a bare `installation_id`; user/refresh tokens
+  never leave the backend.
 
 ## Keeping Docs in Sync
 

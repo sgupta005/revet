@@ -30,6 +30,17 @@ class PRKind(str, Enum):
     AUTO_PR = "auto-pr"
 
 
+class User(SQLModel, table=True):
+    __tablename__ = "user"  # type: ignore[assignment]
+
+    id: int | None = Field(default=None, primary_key=True)
+    github_id: int = Field(unique=True, index=True)
+    login: str
+    avatar_url: str
+    created_at: datetime = Field(default_factory=_utcnow, sa_column=_tz_column())
+    updated_at: datetime = Field(default_factory=_utcnow, sa_column=_tz_updated_column())
+
+
 class Installation(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     github_installation_id: int = Field(unique=True, index=True)

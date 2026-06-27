@@ -25,6 +25,25 @@
 - Use `Depends()` for shared resources (DB session, settings); do not import globals in handlers.
 - `/health` returns a minimal response; no AI calls.
 
+### User-facing API & auth (Phase 5)
+
+- The user-facing routes (`/auth/*`, `/me`, installations/repos, `/chat`) are separate
+  from the webhook router — don't mix the two concerns in one module.
+- Session auth is a dependency: `current_user = Depends(get_current_user)` resolves the
+  session token → Redis → `User`; missing/invalid → `401`. Don't re-implement it per route.
+- Any route touching an installation/repo also depends on an access check
+  (`verify_installation_access`) → `403` if the user can't access it. `installation_id` is
+  **never** trusted as a bare capability.
+- The **installation token** does all repo work; the **user token** is used only for
+  identity/access and **never** leaves the backend (no user/refresh token in any response
+  body or log).
+- OAuth `code` exchange uses `GITHUB_OAUTH_CLIENT_SECRET` from env only; the secret is
+  never logged or returned. The browser receives only the opaque `session_token`.
+- CORS is configured once (allow `FRONTEND_ORIGIN`, credentials on); don't set CORS
+  headers ad hoc in handlers.
+- Validate request bodies (OAuth `code`, repo identifiers) as Pydantic models at the
+  boundary, like webhook payloads.
+
 ## Celery
 
 - Each task calls `asyncio.run(graph.ainvoke(...))`.
@@ -98,9 +117,10 @@ class RelevanceGrade(BaseModel):
 
 ## File Organization
 
-- `app/` — FastAPI app, routes, startup, settings
+- `app/` — FastAPI app, routes (webhook + user-facing API), startup, settings, CORS
+- `app/auth/` — *(Phase 5)* OAuth exchange, Redis sessions, `get_current_user`, access checks
 - `app/workers/` — Celery app + task implementations
-- `app/github/` — GitHub auth (token minting), HMAC, REST helpers
+- `app/github/` — GitHub auth (token minting), HMAC, REST helpers, user-token/OAuth helpers
 - `app/db/` — SQLModel models, engine, session factory
 - `ai/` — AI foundation (llm, vectorstore, retriever, tools, schemas, checkpointer)
 - `ai/graphs/` — One file per feature graph
