@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     langsmith_tracing: bool = False
     langsmith_api_key: str = ""
     langsmith_project: str = "revet"
+    langsmith_endpoint: str = "https://api.smith.langchain.com"
 
     environment: Literal["development", "production"] = "development"
     log_level: str = "INFO"

@@ -121,6 +121,19 @@ Phase 6 — PR Review (multi-agent fan-out graph → posted review + activity ro
 
 - None.
 
+## Observability — LangSmith wiring (2026-06-28)
+
+- `app/observability.py` — `configure_langsmith()` bridges the `LANGSMITH_*` settings into
+  `os.environ` so LangChain/LangGraph auto-trace every graph run. Needed because
+  pydantic-settings loads `.env` into the `Settings` object only, while the LangSmith SDK
+  reads `os.environ` directly — without the bridge, tracing never activated unless the vars
+  were externally exported. Still env-only / no `@traceable` wrappers (per code-standards).
+- `app/config.py` — added `langsmith_endpoint` (region host; was present in `.env` but
+  unmodeled and silently dropped).
+- Wired at both entrypoints: FastAPI lifespan (`app/main.py`) and the Celery worker master
+  (`app/workers/celery_app.py`, before prefork so children inherit `os.environ`).
+- `env.template` — documented `LANGSMITH_ENDPOINT` + the bridge.
+
 ## Next Up
 
 1. **Phase 6 — PR Review**

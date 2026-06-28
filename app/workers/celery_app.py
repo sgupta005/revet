@@ -1,6 +1,11 @@
 from celery import Celery
 
 from app.config import settings
+from app.observability import configure_langsmith
+
+# Set in the worker master before prefork; children inherit os.environ, so the
+# graph runs in review_pr / analyze_issue / auto_pr tasks auto-trace too.
+configure_langsmith()
 
 celery_app = Celery(
     "revet",

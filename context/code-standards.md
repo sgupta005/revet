@@ -112,6 +112,7 @@ class RelevanceGrade(BaseModel):
 ## Observability
 
 - Use `LANGSMITH_TRACING=true` to auto-trace all graph runs — do not add manual trace wrappers.
+- `configure_langsmith()` (`app/observability.py`) exports the `LANGSMITH_*` settings into `os.environ` at startup (called from the FastAPI lifespan and the Celery worker master) — pydantic-settings loads `.env` into `Settings` only, while the tracer reads `os.environ`. This is the env-only wiring; it is not a per-run trace wrapper.
 - Emit structured per-task logs: task id, repo, duration, outcome.
 - Never log tokens, full file contents, or secrets.
 

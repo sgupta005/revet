@@ -147,7 +147,13 @@ installation/repo routes are access-checked.
 `DATABASE_URL` · `REDIS_URL` · `OPENAI_API_KEY` · `LLM_MODEL` (e.g. `openai:gpt-4o`) ·
 `EMBEDDING_MODEL` (default `text-embedding-3-small`) · `GITHUB_APP_ID` ·
 `GITHUB_APP_PRIVATE_KEY` · `GITHUB_WEBHOOK_SECRET` · `LANGSMITH_TRACING` ·
-`LANGSMITH_API_KEY` · `LANGSMITH_PROJECT` · `ENVIRONMENT` · `LOG_LEVEL`
+`LANGSMITH_API_KEY` · `LANGSMITH_PROJECT` · `LANGSMITH_ENDPOINT` (region host,
+default `https://api.smith.langchain.com`) · `ENVIRONMENT` · `LOG_LEVEL`
+
+`configure_langsmith()` (`app/observability.py`) bridges these `LANGSMITH_*` settings
+into `os.environ` at startup (FastAPI lifespan + Celery worker master) — pydantic-settings
+loads `.env` into `Settings` only, but the LangChain/LangGraph tracer reads `os.environ`,
+so without the bridge tracing never activates unless the vars are externally exported.
 
 Phase 5 (Auth & Frontend API): `GITHUB_OAUTH_CLIENT_ID` · `GITHUB_OAUTH_CLIENT_SECRET`
 (the OAuth secret — backend only, never exposed) · `FRONTEND_ORIGIN` (CORS allow-list,
