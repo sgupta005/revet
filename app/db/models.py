@@ -87,3 +87,19 @@ class Issue(SQLModel, table=True):
     state: str
     created_at: datetime = Field(default_factory=_utcnow, sa_column=_tz_column())
     updated_at: datetime = Field(default_factory=_utcnow, sa_column=_tz_updated_column())
+
+
+class ChatThread(SQLModel, table=True):
+    """Ownership bridge linking a LangGraph thread_id to the user who created it.
+    The LangGraph checkpointer holds the actual messages keyed by thread_id; this
+    table exists only to enforce that thread_ids are never bare capabilities (invariant #14)."""
+
+    __tablename__ = "chat_thread"  # type: ignore[assignment]
+
+    id: int | None = Field(default=None, primary_key=True)
+    thread_id: str = Field(unique=True, index=True)
+    user_id: int = Field(foreign_key="user.id", index=True)
+    repo: str = Field(index=True)
+    title: str
+    created_at: datetime = Field(default_factory=_utcnow, sa_column=_tz_column())
+    updated_at: datetime = Field(default_factory=_utcnow, sa_column=_tz_updated_column())

@@ -92,7 +92,7 @@ locate (agentic retrieval) ─▶ plan (FixPlan) ─▶ [fan-out per file] gener
 
 ## Storage Model
 
-- **Postgres (relational)**: `Installation`, `Repository`, `Rule`, `PullRequest`, `Issue` tables; *(Phase 5)* `User` (durable identity: `github_id`, `login`, `avatar_url`). Schema created via `metadata.create_all()` at startup — no migration tool in v1.
+- **Postgres (relational)**: `Installation`, `Repository`, `Rule`, `PullRequest`, `Issue` tables; *(Phase 5)* `User` (durable identity: `github_id`, `login`, `avatar_url`); *(Phase 6)* `ChatThread` (ownership bridge: `thread_id UUID unique`, `user_id FK→User`, `repo` full-name string, `title` string, `created_at`, `updated_at`). Schema created via `metadata.create_all()` at startup — no migration tool in v1.
 - **Postgres (pgvector)**: Code-chunk embeddings — `embedding vector(1536)` + metadata `{repo, path, name, chunk_type, language, start_line, end_line}` + page content. Deterministic id = `hash(repo + path + line-span)` for idempotent upsert. Retrieval always filters on `repo`.
 - **Postgres (LangGraph checkpointer)**: `AsyncPostgresSaver` state for chat memory (keyed by `thread_id`) and durable auto-PR.
 - **Redis**: Celery broker + result backend; GitHub installation token cache (with TTL); webhook delivery-id dedup keys; *(Phase 5)* user **sessions** (`session_token → {user_id, user_token, refresh_token, expires_at}`, with TTL) and a user-installations cache. User/refresh tokens live only here — never in the browser.
@@ -140,7 +140,9 @@ installation/repo routes are access-checked.
 | `GET`  | `/installations/{installation_id}/repositories` | Stored `Repository` rows joined with the user's live installation repos + indexing status; `?refresh=1` re-pulls live |
 | `POST` | `/repos/{owner}/{repo}/index` | Enqueue the existing `index_repo` task |
 | `GET`  | `/repos/{owner}/{repo}/index-status` | Current `indexing_status` (+ counts) |
-| `POST` | `/chat` | Existing SSE endpoint — now session-gated |
+| `POST` | `/chat` | Existing SSE endpoint — now session-gated; upserts a `ChatThread` row on new threads |
+| `GET`  | `/repos/{owner}/{repo}/chat/threads` | List `ChatThread` rows for the authed user + repo (access-checked); ordered by `updated_at` desc |
+| `GET`  | `/chat/threads/{thread_id}` | Return `[{role, content}]` messages for the thread — read back from LangGraph checkpointer; `403` if the thread doesn't belong to the authed user |
 
 ## Configuration (env vars)
 
@@ -178,3 +180,7 @@ credentialed) · `SESSION_TTL` (session lifetime).
 13. *(Phase 5)* Every user-facing installation/repo endpoint runs `get_current_user` then
     `verify_installation_access` before acting — `installation_id` is never trusted as a
     bare capability. The OAuth client secret comes from env only and is never exposed.
+14. *(Phase 6)* A `thread_id` is never trusted as a bare capability — `GET /chat/threads/{thread_id}`
+    verifies `ChatThread.user_id == authed.user.id` before reading checkpointer state; `403` if it
+    doesn't match. Thread title is derived from the first human message (truncated to 80 chars); no
+    extra LLM call.

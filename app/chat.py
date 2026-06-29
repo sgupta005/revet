@@ -1,6 +1,7 @@
 import json
 import uuid
 from collections.abc import AsyncGenerator
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -12,7 +13,7 @@ from sqlmodel import select
 from ai.checkpointer import checkpointer
 from ai.graphs.chat import build_chat_graph
 from app.auth.dependencies import AuthedUser, get_current_user, verify_installation_access
-from app.db.models import Installation, Repository
+from app.db.models import ChatThread, Installation, Repository
 from app.db.session import get_session
 
 router = APIRouter()
@@ -63,6 +64,34 @@ async def chat(
     installation_id = await _installation_id(session, req.repo)
     await verify_installation_access(authed, installation_id)
     thread_id = req.thread_id or str(uuid.uuid4())
+
+    if req.thread_id is None:
+        session.add(ChatThread(
+            thread_id=thread_id,
+            user_id=authed.user.id,
+            repo=req.repo,
+            title=req.message[:80],
+        ))
+    else:
+        result = await session.execute(
+            select(ChatThread).where(ChatThread.thread_id == thread_id)
+        )
+        existing = result.scalar_one_or_none()
+        if existing is None:
+            # Pre-Phase-6 thread: no ownership row yet — claim it now so the
+            # GET history endpoint starts working after this first turn.
+            session.add(ChatThread(
+                thread_id=thread_id,
+                user_id=authed.user.id,
+                repo=req.repo,
+                title=req.message[:80],
+            ))
+        elif existing.user_id != authed.user.id:
+            raise HTTPException(status_code=403, detail="no access to thread")
+        else:
+            existing.updated_at = datetime.now(timezone.utc)
+    await session.commit()
+
     config = {
         "configurable": {
             "thread_id": thread_id,

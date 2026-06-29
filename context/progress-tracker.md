@@ -8,7 +8,7 @@ Phase 5 — Complete
 
 ## Current Goal
 
-Phase 6 — PR Review (multi-agent fan-out graph → posted review + activity row).
+Phase 7 — PR Review (multi-agent fan-out graph → posted review + activity row).
 
 ## Completed
 
@@ -117,6 +117,25 @@ Phase 6 — PR Review (multi-agent fan-out graph → posted review + activity ro
   - Note: appended placeholder `GITHUB_OAUTH_CLIENT_ID`/`_SECRET`/`FRONTEND_ORIGIN`/`SESSION_TTL`
     to the local `.env` so the service boots; real values must be filled before live OAuth.
 
+- **Phase 6 — Chat History** (2026-06-29)
+  - `app/db/models.py` — `ChatThread` table (`thread_id` unique string, `user_id FK→User`,
+    `repo` full-name, `title`, `created_at`, `updated_at`); schema created via `create_all()`
+    at startup as with other tables.
+  - `ai/checkpointer.py` — `get_thread_messages(thread_id)` reads the LangGraph checkpoint
+    for a thread and returns `[{role, content}]`; filters to `HumanMessage`/`AIMessage` only,
+    skips tool-call chunks with non-string content. Returns `[]` when no checkpoint exists.
+  - `app/chat.py` — `POST /chat` now upserts a `ChatThread` row before streaming: new threads
+    (no `thread_id` in request) create a row with `title = message[:80]`; existing threads
+    verify `user_id == authed.user.id` (403 on mismatch, invariant #14) and touch `updated_at`
+    for recency ordering. Commit happens before the `StreamingResponse` is returned.
+  - `app/api.py` — two new access-checked endpoints:
+    - `GET /repos/{owner}/{repo}/chat/threads` — lists the user's `ChatThread` rows for a repo
+      ordered by `updated_at DESC`; access-checked via `_authorize_repo`.
+    - `GET /chat/threads/{thread_id}` — verifies ownership, reads messages from the LangGraph
+      checkpointer via `get_thread_messages`, returns `[{role, content}]`.
+  - Response models added: `ChatThreadOut`, `MessageOut`.
+  - Verified: all modules import cleanly; 2 new routes register.
+
 ## In Progress
 
 - None.
@@ -136,11 +155,11 @@ Phase 6 — PR Review (multi-agent fan-out graph → posted review + activity ro
 
 ## Next Up
 
-1. **Phase 6 — PR Review**
-2. **Phase 7 — Issue Analysis**
-3. **Phase 8 — Auto-PR**
-4. **Phase 9 — Evals**
-5. **Phase 10 — Polish**
+1. **Phase 7 — PR Review**
+3. **Phase 8 — Issue Analysis**
+4. **Phase 9 — Auto-PR**
+5. **Phase 10 — Evals**
+6. **Phase 11 — Polish**
 
 ## Open Questions
 

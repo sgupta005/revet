@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel
@@ -13,7 +14,7 @@ from app.auth.dependencies import (
     verify_installation_access,
 )
 from app.auth.sessions import create_session, delete_session
-from app.db.models import IndexingStatus, Installation, Repository, User
+from app.db.models import ChatThread, IndexingStatus, Installation, Repository, User
 from app.db.session import get_session as get_db
 from app.github.constants import USER_REPOS_KEY, USER_CACHE_TTL
 from app.github.oauth import (
@@ -65,6 +66,19 @@ class IndexStatusResponse(BaseModel):
     full_name: str
     indexing_status: IndexingStatus
     chunk_count: int
+
+
+class ChatThreadOut(BaseModel):
+    thread_id: str
+    repo: str
+    title: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class MessageOut(BaseModel):
+    role: str
+    content: str
 
 
 def _user_out(user: User) -> UserOut:
@@ -221,3 +235,60 @@ async def index_status(
     return IndexStatusResponse(
         full_name=full_name, indexing_status=status, chunk_count=chunk_count
     )
+
+
+@router.get(
+    "/repos/{owner}/{repo}/chat/threads",
+    response_model=list[ChatThreadOut],
+)
+async def list_chat_threads(
+    owner: str,
+    repo: str,
+    authed: AuthedUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[ChatThreadOut]:
+    """List the authed user's chat threads for a repo, ordered by most recently active.
+    Access-checked: 404 if the app is not installed on the repo, 403 if the user
+    cannot access its installation."""
+    full_name = f"{owner}/{repo}"
+    await _authorize_repo(authed, db, full_name)
+    result = await db.execute(
+        select(ChatThread)
+        .where(ChatThread.user_id == authed.user.id, ChatThread.repo == full_name)
+        .order_by(ChatThread.updated_at.desc())
+    )
+    threads = result.scalars().all()
+    return [
+        ChatThreadOut(
+            thread_id=t.thread_id,
+            repo=t.repo,
+            title=t.title,
+            created_at=t.created_at,
+            updated_at=t.updated_at,
+        )
+        for t in threads
+    ]
+
+
+@router.get("/chat/threads/{thread_id}", response_model=list[MessageOut])
+async def get_chat_thread(
+    thread_id: str,
+    authed: AuthedUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[MessageOut]:
+    """Return [{role, content}] messages for a thread read back from the LangGraph
+    checkpointer. 403 when the thread doesn't exist or belongs to another user —
+    thread_id is never a bare capability (invariant #14)."""
+    from ai.checkpointer import get_thread_messages
+
+    result = await db.execute(
+        select(ChatThread).where(ChatThread.thread_id == thread_id)
+    )
+    thread = result.scalar_one_or_none()
+    # A row claimed by a different user is a hard 403 (invariant #14).
+    # No row means an orphaned pre-Phase-6 thread — UUID randomness makes
+    # guessing infeasible, so read the checkpointer directly.
+    if thread is not None and thread.user_id != authed.user.id:
+        raise HTTPException(status_code=403, detail="no access to thread")
+    messages = await get_thread_messages(thread_id)
+    return [MessageOut(**m) for m in messages]

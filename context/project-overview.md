@@ -50,6 +50,8 @@ API (added in Phase 5 — GitHub OAuth + user-facing endpoints).
 - Grounded answers showing path, symbol, and line range
 - Corrective RAG loop: grade documents → rewrite query if weak → retrieve again (max ~2 loops)
 - Responses stream via SSE; conversation memory persisted per `thread_id` via checkpointer
+- *(Phase 6)* Thread ownership: `ChatThread` row links each `thread_id` to the user + repo; title auto-set from the first message (≤80 chars)
+- *(Phase 6)* `GET /repos/{owner}/{repo}/chat/threads` lists the user's threads for a repo; `GET /chat/threads/{thread_id}` returns the full message history (read back from the LangGraph checkpointer); both access-checked
 
 ### AI Issue Analysis — Agentic RAG / ReAct (F4)
 - ReAct agent explores the index (search → read → follow references) on each new issue
