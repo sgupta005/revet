@@ -183,6 +183,16 @@ Phase 8 — Issue Analysis (agentic-RAG / ReAct graph → comment + activity row
     `configurable` are never serialized (same mechanism the Phase 4 chat graph relies on).
     (Live OpenAI/GitHub/Postgres run deferred — same as prior phases.)
 
+- **Reviews activity feed endpoint** (2026-07-01)
+  - `app/api.py` — `GET /repos/{owner}/{repo}/pulls` (+ `PullReviewOut` schema): access-checked
+    (`_authorize_repo`) list of the repo's `PullRequest` rows where `kind=review`, `updated_at`
+    desc, shaped as `{pr_number, state, github_url, created_at, updated_at}` with
+    `github_url = https://github.com/{owner}/{repo}/pull/{n}`. Mirrors `list_chat_threads`.
+  - Backs the frontend "Reviews" tool (`../revet_fe` `…/pulls`): a read-only feed deep-linking
+    to each review on GitHub. Reuses the existing thin activity row — **no new persistence,
+    no migration**. The row stores no findings/PR-title, so the feed is intentionally minimal;
+    rendering findings in-app would require persisting the rendered review body/findings (deferred).
+
 ## In Progress
 
 - None.

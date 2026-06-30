@@ -143,6 +143,7 @@ installation/repo routes are access-checked.
 | `POST` | `/chat` | Existing SSE endpoint — now session-gated; upserts a `ChatThread` row on new threads |
 | `GET`  | `/repos/{owner}/{repo}/chat/threads` | List `ChatThread` rows for the authed user + repo (access-checked); ordered by `updated_at` desc |
 | `GET`  | `/chat/threads/{thread_id}` | Return `[{role, content}]` messages for the thread — read back from LangGraph checkpointer; `403` if the thread doesn't belong to the authed user |
+| `GET`  | `/repos/{owner}/{repo}/pulls` | List `PullRequest` rows (`kind=review`) for the repo (access-checked), `updated_at` desc → `[{pr_number, state, github_url, created_at, updated_at}]`. Read-only "Reviews" activity feed; the review body lives only on the GitHub PR (`github_url`) — the row stores no findings/title |
 
 ## Configuration (env vars)
 

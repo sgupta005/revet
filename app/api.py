@@ -14,7 +14,15 @@ from app.auth.dependencies import (
     verify_installation_access,
 )
 from app.auth.sessions import create_session, delete_session
-from app.db.models import ChatThread, IndexingStatus, Installation, Repository, User
+from app.db.models import (
+    ChatThread,
+    IndexingStatus,
+    Installation,
+    PRKind,
+    PullRequest,
+    Repository,
+    User,
+)
 from app.db.session import get_session as get_db
 from app.github.constants import USER_REPOS_KEY, USER_CACHE_TTL
 from app.github.oauth import (
@@ -79,6 +87,14 @@ class ChatThreadOut(BaseModel):
 class MessageOut(BaseModel):
     role: str
     content: str
+
+
+class PullReviewOut(BaseModel):
+    pr_number: int
+    state: str
+    github_url: str
+    created_at: datetime
+    updated_at: datetime
 
 
 def _user_out(user: User) -> UserOut:
@@ -267,6 +283,41 @@ async def list_chat_threads(
             updated_at=t.updated_at,
         )
         for t in threads
+    ]
+
+
+@router.get(
+    "/repos/{owner}/{repo}/pulls",
+    response_model=list[PullReviewOut],
+)
+async def list_pull_reviews(
+    owner: str,
+    repo: str,
+    authed: AuthedUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[PullReviewOut]:
+    """List the PRs Revet has reviewed for a repo, most recent first — a read-only
+    activity feed. The review itself lives on the GitHub PR (`github_url`); this
+    surfaces only the stored activity rows. Access-checked: 404 if the app is not
+    installed on the repo, 403 if the user cannot access its installation."""
+    full_name = f"{owner}/{repo}"
+    await _authorize_repo(authed, db, full_name)
+    result = await db.execute(
+        select(PullRequest)
+        .join(Repository, Repository.id == PullRequest.repo_id)
+        .where(Repository.full_name == full_name, PullRequest.kind == PRKind.REVIEW)
+        .order_by(PullRequest.updated_at.desc())
+    )
+    pulls = result.scalars().all()
+    return [
+        PullReviewOut(
+            pr_number=p.github_pr_number,
+            state=p.state,
+            github_url=f"https://github.com/{full_name}/pull/{p.github_pr_number}",
+            created_at=p.created_at,
+            updated_at=p.updated_at,
+        )
+        for p in pulls
     ]
 
 
