@@ -13,3 +13,7 @@ SESSION_KEY = "auth:session:{session_token}"
 USER_INSTALLATIONS_KEY = "auth:user_installs:{user_id}"
 USER_REPOS_KEY = "auth:user_repos:{user_id}:{installation_id}"
 USER_CACHE_TTL = 300  # short TTL: identity/access lists refresh frequently
+
+# PR review
+PER_PAGE = 100
+MAX_FILE_PAGES = 3  # cap the PR size we review (≤ 300 changed files)

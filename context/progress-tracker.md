@@ -4,11 +4,11 @@ Update this file after every meaningful implementation change.
 
 ## Current Phase
 
-Phase 5 — Complete
+Phase 7 — Complete
 
 ## Current Goal
 
-Phase 7 — PR Review (multi-agent fan-out graph → posted review + activity row).
+Phase 8 — Issue Analysis (agentic-RAG / ReAct graph → comment + activity row).
 
 ## Completed
 
@@ -135,6 +135,53 @@ Phase 7 — PR Review (multi-agent fan-out graph → posted review + activity ro
       checkpointer via `get_thread_messages`, returns `[{role, content}]`.
   - Response models added: `ChatThreadOut`, `MessageOut`.
   - Verified: all modules import cleanly; 2 new routes register.
+- **Phase 7 — PR Review** (2026-06-27)
+  - `ai/schemas.py` — added `ReviewFindings` (wraps `list[ReviewFinding]`) so a reviewer
+    can emit a list via `with_structured_output` (structured output needs one top-level model).
+  - `ai/constants.py` — PR-review knobs: `REVIEWER_MODEL=openai:gpt-4o-mini` (cheap per
+    reviewer), `REVIEW_PERSPECTIVES=(correctness, security, quality, custom-rules)`,
+    `MAX_DIFF_CHARS`, `REVIEW_CONTEXT_K`, `REVIEW_QUERY_CHARS`, `MIN_FINDING_CONFIDENCE`,
+    `MAX_FINDINGS`.
+  - `ai/prompts.py` — `PR_REVIEW_SYSTEM` (per-perspective, `{perspective}`/`{focus}`),
+    `PR_REVIEW_PERSPECTIVE_FOCUS` map, `PR_REVIEW_HUMAN` (title/body/diff/context),
+    `PR_REVIEW_RULES_BLOCK` (appended only for the custom-rules reviewer).
+  - `app/github/pulls.py` — new PR REST helpers (separate concern from `files.py`):
+    `fetch_pull_request` (metadata + paginated changed files, capped at `MAX_FILE_PAGES`),
+    `post_review` (one review via the Reviews API, `event="COMMENT"` — never approves/
+    requests-changes, no per-line diff-position mapping). Boundary shapes `PRFile`/
+    `PullRequestData` are frozen dataclasses.
+  - `ai/graphs/pr_review.py` — multi-agent fan-out `StateGraph` matching the PRD shape:
+    `prepare → retrieve_context → [Send fan-out] review ×N → aggregate → format_post`.
+    `prepare` fetches the PR (title/body/diff/changed files) + loads `repo_id` and the
+    installation's custom rules. `retrieve_context` does a repo-scoped similarity search
+    (invariant #6) for related code. `_fan_out` emits one `Send("review", …)` per
+    perspective (custom-rules only when rules exist). `review` builds a **fresh** chat
+    model per call (`make_chat_model`, never the cached singleton) and emits
+    `ReviewFindings` via `with_structured_output`. `findings` uses an `operator.add`
+    reducer to merge the parallel reviewers; `aggregate` **deterministically** dedupes
+    (file+line+comment, keeping the highest-confidence dup), drops < `MIN_FINDING_CONFIDENCE`,
+    ranks by severity then confidence, and caps at `MAX_FINDINGS` into a plain `ranked`
+    channel. `format_post` renders one severity-grouped markdown review (`path:line`
+    citations), posts it, and upserts the `PullRequest` activity row (kind=review, upsert on
+    repo+number+kind so a `synchronize` re-review never duplicates).
+  - `run_pr_review` (Celery entrypoint) builds a per-run DB engine + async PGVector store
+    (prefork-safe, invariant #3), injects them + repo/installation/pr via
+    `config["configurable"]`, compiles the module-level graph against a per-run
+    `checkpointer()`, runs one review with a fresh `thread_id` (uuid) so the `findings`
+    reducer never carries over between runs, and disposes both resources in `finally`.
+  - `app/workers/tasks.py` — `review_pr` now runs `asyncio.run(run_pr_review(...))` with
+    `autoretry_for`/`retry_backoff` (3 retries), matching `index_repo`.
+  - Verified: all modules import; graph compiles (nodes prepare/retrieve_context/review/
+    aggregate/format_post). End-to-end `ainvoke` with fakes (mocked GitHub + DB helpers +
+    fake structured model + fake store) — 4 perspectives fan out with rules / 3 without;
+    `operator.add` merges 6 raw findings; aggregate dedupes the duplicated finding (keeps
+    0.95 over 0.6), drops the 0.1-confidence one, ranks critical→low, caps at `MAX_FINDINGS`;
+    `format_post` posts one grouped markdown review and upserts the `PullRequest` row;
+    empty-findings renders "No issues found"; `_build_diff` truncates oversized PRs.
+    Confirmed the checkpointer persists only `thread_id`/`checkpoint_ns`/`checkpoint_id`
+    + serializable state channels, so the injected `engine`/`store` objects in
+    `configurable` are never serialized (same mechanism the Phase 4 chat graph relies on).
+    (Live OpenAI/GitHub/Postgres run deferred — same as prior phases.)
 
 ## In Progress
 
@@ -155,19 +202,22 @@ Phase 7 — PR Review (multi-agent fan-out graph → posted review + activity ro
 
 ## Next Up
 
-1. **Phase 7 — PR Review**
-3. **Phase 8 — Issue Analysis**
-4. **Phase 9 — Auto-PR**
-5. **Phase 10 — Evals**
-6. **Phase 11 — Polish**
+1. **Phase 8 — Issue Analysis**
+2. **Phase 9 — Auto-PR**
+3. **Phase 10 — Evals**
+4. **Phase 11 — Polish**
 
 ## Open Questions
 
-- **LLM model choice**: *Decided for chat (Phase 4)* — generation uses the default
-  `settings.llm_model` (gpt-4o); the document grader and query rewriter use the cheaper
-  `GRADER_MODEL=openai:gpt-4o-mini` (`ai/constants.py`). Still open for the PR-review
-  reviewers (Phase 6) — apply the same split (cheap per-reviewer model, capable aggregator)
-  unless evals show otherwise.
+- **LLM model choice**: *Decided for chat (Phase 4) and PR review (Phase 6).* Chat
+  generation uses the default `settings.llm_model` (gpt-4o); the document grader and query
+  rewriter use the cheaper `GRADER_MODEL=openai:gpt-4o-mini`. PR-review **reviewers** use
+  `REVIEWER_MODEL=openai:gpt-4o-mini` (cheap, parallel, one structured-output call each).
+  The planned "capable aggregator" turned out to be unnecessary: `aggregate` dedupes + ranks
+  structured findings, which is a deterministic set/sort operation needing no LLM — so no
+  capable model is used in PR review. Revisit (a stronger reviewer model, or an LLM
+  aggregator that merges semantically-duplicate findings) only if Phase 9 evals show review
+  quality is weak. Changing the reviewer model is a one-constant edit.
 - **Migrations**: v1 uses `create_all()`; note when the schema starts churning so we can
   adopt Alembic at the right time.
 - **Embedding dimensions**: PRD specifies `text-embedding-3-small` (1536-dim). If we
@@ -196,11 +246,18 @@ Phase 7 — PR Review (multi-agent fan-out graph → posted review + activity ro
   cookie is set.
 - **Tool vectorstore reuse under Celery**: `retrieve_code`/`grep_symbol` use the cached
   `get_vectorstore()` singleton (async engine). This is correct for `/chat` (synchronous,
-  one event loop) — *confirmed in Phase 4*. For the Celery graph tools (issue/PR/auto-PR, each `asyncio.run()`), the
-  module-level async engine can bind to a closed loop (invariant #3) — when those graphs land
-  (Phase 6–8) they must inject a per-task store/retriever via `config["configurable"]` or
-  build one per run, like `run_index` does. Tools already read everything else from config, so
-  this is an additive change with no tool-signature churn.
+  one event loop) — *confirmed in Phase 4*. For the Celery graph tools (issue/PR/auto-PR, each
+  `asyncio.run()`), the module-level async engine can bind to a closed loop (invariant #3).
+  *Phase 6 established the pattern for PR review*: `run_pr_review` builds a per-run async
+  PGVector store **and** a per-run DB engine, injects them via `config["configurable"]`
+  (`store`/`engine`), and the nodes use them directly (`store.asimilarity_search(...,
+  filter={"repo": repo})`) instead of the cached singleton; chat models are also built fresh
+  per call (`make_chat_model`, not `get_chat_model`). Phases 7–8 (issue/auto-PR) that use the
+  `ai/tools.py` `@tool`s must do the same — inject a per-task store so the tools don't reach
+  for the cached singleton; the tools already read repo/installation/ref from
+  `config["configurable"]`, so this is additive. *(Confirmed the LangGraph checkpointer
+  persists only thread/checkpoint ids + serializable state channels, so injecting the
+  non-serializable engine/store objects via `configurable` is safe.)*
 
 ## Architecture Decisions
 
@@ -211,6 +268,23 @@ Phase 7 — PR Review (multi-agent fan-out graph → posted review + activity ro
   dependency can't cover both sources, so the check stays an explicit first line in every
   installation/repo handler (still uniform, still invariant #13). Only `get_current_user`
   (no parameters) is a dependency. (Phase 5)
+- **PR review posts one COMMENT review, not inline comments** — `format_post` posts a
+  single severity-grouped markdown review via the Reviews API with `event="COMMENT"`. The
+  PRD allows "single comment or inline"; inline comments require mapping each finding to a
+  valid diff position, and the Reviews API rejects the *whole* review if any line isn't part
+  of the diff. The summary form is robust, needs no position mapping, and never approves or
+  requests changes. (PRD §F5; revisit if inline anchoring is wanted later.) (Phase 6)
+- **PR-review fan-out is one parametrized `review` node, not four** — a single `review`
+  node fanned out with `Send` over `REVIEW_PERSPECTIVES` (correctness/security/quality/
+  custom-rules), each carrying its perspective in the `Send` payload, rather than four
+  near-duplicate node functions. This is the idiomatic LangGraph map-reduce shape and keeps
+  the reviewers DRY; architecture.md's diagram lists the four perspectives as the logical
+  view. custom-rules is only dispatched when the installation has rules. (Phase 6)
+- **PR-review aggregation is deterministic** — `aggregate` dedupes (file+line+comment) and
+  ranks (severity then confidence) the structured `ReviewFinding`s with plain Python, not an
+  LLM, because dedupe+rank is a set/sort operation. The fan-out collects into an
+  `operator.add` reducer channel (`findings`); aggregate writes a separate plain `ranked`
+  channel (writing back to the reducer channel would *append*, not replace). (Phase 6)
 - **Indexing is a plain async pipeline, not a LangGraph graph** — no reasoning step
   needed; adding a graph would be over-engineering. (PRD §F2)
 - **Single Postgres for everything** — relational data, pgvector embeddings, and

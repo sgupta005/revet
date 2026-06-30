@@ -22,6 +22,16 @@ class ReviewFinding(BaseModel):
     )
 
 
+class ReviewFindings(BaseModel):
+    """Wrapper a PR reviewer emits via `with_structured_output`; structured output
+    needs a single top-level model, so the `list[ReviewFinding]` is nested here."""
+
+    findings: list[ReviewFinding] = Field(
+        default_factory=list,
+        description="Every issue found from this reviewer's perspective; empty if none.",
+    )
+
+
 class FixFile(BaseModel):
     """One file the auto-PR plan intends to create, update, or delete."""
 

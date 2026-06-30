@@ -39,7 +39,7 @@ GitHub App ──webhooks──▶ FastAPI ──verify HMAC, dedup, enqueue─�
 - `app/` — FastAPI application: webhook router, user-facing API router (`/auth/*`, `/me`, installations/repos, `/chat`), `/health`, CORS, startup
 - `app/auth/` — *(Phase 5)* GitHub OAuth code exchange, Redis session store, `get_current_user` dependency, `verify_installation_access` access check
 - `app/workers/` — Celery app definition and task implementations (`index_repo`, `review_pr`, `analyze_issue`, `auto_pr`)
-- `app/github/` — GitHub App token minting, HMAC verification, REST API helpers, repo file fetch (`files.py`: tree / blob / contents); *(Phase 5)* user-token OAuth exchange + `GET /user`/`GET /user/installations` helpers
+- `app/github/` — GitHub App token minting, HMAC verification, REST API helpers, repo file fetch (`files.py`: tree / blob / contents); *(Phase 5)* user-token OAuth exchange + `GET /user`/`GET /user/installations` helpers; *(Phase 6)* `pulls.py`: PR metadata + changed files fetch and posting a review (Reviews API)
 - `app/db/` — SQLModel models, engine setup, session factory (`build_engine()` mints a throwaway engine per Celery task)
 - `ai/` — AI foundation and all LangGraph graphs
 - `ai/graphs/` — One file per feature graph: `chat.py`, `pr_review.py`, `issue_analysis.py`, `auto_pr.py`

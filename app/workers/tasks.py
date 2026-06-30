@@ -22,14 +22,16 @@ def index_repo(
     asyncio.run(run_index(repo_full_name, installation_id, changed_paths))
 
 
-@celery_app.task(name="review_pr")
+@celery_app.task(
+    name="review_pr",
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_kwargs={"max_retries": 3},
+)
 def review_pr(repo_full_name: str, installation_id: int, pr_number: int) -> None:
-    logger.info(
-        "review_pr queued repo=%s installation=%s pr=%s",
-        repo_full_name,
-        installation_id,
-        pr_number,
-    )
+    from ai.graphs.pr_review import run_pr_review
+
+    asyncio.run(run_pr_review(repo_full_name, installation_id, pr_number))
 
 
 @celery_app.task(name="analyze_issue")
