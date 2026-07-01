@@ -20,11 +20,17 @@ def get_embeddings() -> OpenAIEmbeddings:
     return make_embeddings()
 
 
-def make_chat_model(model: str | None = None) -> BaseChatModel:
+def make_chat_model(
+    model: str | None = None, *, temperature: float | None = None
+) -> BaseChatModel:
     """Build a chat model via init_chat_model; `model` is a provider-prefixed
     id (e.g. `openai:gpt-4o`) defaulting to settings.llm_model, so the provider
-    is swappable by changing one config string."""
-    return init_chat_model(model or settings.llm_model, api_key=settings.openai_api_key)
+    is swappable by changing one config string. `temperature` is passed through
+    when set (auto-PR uses a low temperature for deterministic plan/generation)."""
+    kwargs = {} if temperature is None else {"temperature": temperature}
+    return init_chat_model(
+        model or settings.llm_model, api_key=settings.openai_api_key, **kwargs
+    )
 
 
 @lru_cache(maxsize=None)
