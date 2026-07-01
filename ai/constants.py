@@ -31,3 +31,7 @@ REVIEW_CONTEXT_K = 6  # related-code chunks retrieved for reviewer context
 REVIEW_QUERY_CHARS = 1500  # cap the retrieval query built from the diff
 MIN_FINDING_CONFIDENCE = 0.3  # drop low-confidence findings during aggregation
 MAX_FINDINGS = 20  # cap findings posted in one review
+
+# Custom rules (PRD §F7): per-repo, injected into PR review / issue analysis / auto-PR.
+# A generous fixed cap bounds prompt size in every rule-aware feature.
+MAX_RULES = 50

@@ -60,8 +60,11 @@ class Repository(SQLModel, table=True):
 
 
 class Rule(SQLModel, table=True):
+    # Per-repo (decision 2026-07-02): each repository owns its own review-rule set,
+    # not the installation. Fetched repo-scoped and injected into PR review, issue
+    # analysis, and auto-PR prompts (PRD §F7).
     id: int | None = Field(default=None, primary_key=True)
-    installation_id: int = Field(foreign_key="installation.id", index=True)
+    repository_id: int = Field(foreign_key="repository.id", index=True)
     name: str
     body: str
     created_at: datetime = Field(default_factory=_utcnow, sa_column=_tz_column())
