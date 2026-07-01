@@ -8,10 +8,8 @@ Phase 7 — Complete
 
 ## Current Goal
 
-Two PR-review fixes must land **before** Phase 8 starts (see "Before Phase 8 — PR
-Review fixes"): the first-run event-loop error on `review_pr`, and more readable
-GitHub review formatting. Then: Phase 8 — Issue Analysis (agentic-RAG / ReAct
-graph → comment + activity row).
+Phase 8 — Issue Analysis (agentic-RAG / ReAct graph → comment + activity row). The two
+pre–Phase-8 PR-review fixes are **done** (see Completed → "Pre–Phase-8 PR-review fixes").
 
 ## Completed
 
@@ -200,28 +198,29 @@ graph → comment + activity row).
 
 - None.
 
-## Before Phase 8 — PR Review fixes (must land first)
-
-These refine the completed Phase 7 PR-review path and are prioritized **ahead of**
-Phase 8 (Issue Analysis):
-
-1. **First-run event-loop error on `review_pr`** — the PR-review graph reliably
-   throws an event-loop error on its *first* execution and only succeeds on the
-   Celery retry. Almost certainly a cross-loop reuse of a module-level async client
-   (invariant #3): something in the first `asyncio.run(run_pr_review(...))` binds to
-   / reuses a connection created on a prior (now-closed) loop. `run_pr_review`
-   already builds a per-run engine + store, so audit every remaining path that could
-   reach a cached singleton — the `ai/tools.py` `@tool`s, `get_vectorstore()` /
-   `get_embeddings()` / `get_chat_model()`, `make_embeddings`, and the checkpointer
-   connection. Fix so the first run succeeds **without** relying on the retry.
-   (Relates to the "Tool vectorstore reuse under Celery" open question.)
-
-2. **Readable, well-formatted GitHub review output** — improve `format_post`
-   (`ai/graphs/pr_review.py`) so the posted review renders cleanly on GitHub:
-   clearer severity grouping/headers, collapsible sections when long, code-span
-   `path:line` citations, per-finding category/confidence, and a short summary
-   header. Presentation-only — must **not** change the deterministic aggregation /
-   dedupe / ranking logic.
+- **Pre–Phase-8 PR-review fixes** (2026-07-02) — both mandated fixes landed:
+  1. **First-run event-loop error on `review_pr` — fixed at the root.** The last
+     cross-loop async singleton the PR-review path reached was the `redis.asyncio`
+     client (via `get_installation_token`). A `redis.asyncio` client binds its
+     connection pool to the loop it first runs on; each Celery task runs its own
+     `asyncio.run()` loop (invariant #3), so the client created on a *prior* task's
+     (now-closed) loop made the first command on the new loop raise "Event loop is
+     closed" — the pool then evicted the dead connection, which is why the retry
+     succeeded. `app/redis_client.py` `get_redis()` is now **loop-aware**: it caches
+     the client per running loop and rebuilds when the loop changes, so the first run
+     succeeds without the retry. Added `close_redis()` (closes + forgets the client);
+     `run_pr_review` calls it in `finally` alongside the engine/store dispose. FastAPI
+     (one long-lived loop) is unaffected — it never rebuilds. *Follow-up:* the
+     issue/auto-PR entrypoints (Phases 8–9) must call `close_redis()` in `finally`
+     too; `run_index` benefits from loop-aware `get_redis` already but doesn't yet
+     close on teardown (harmless; tidy up if it ever warns).
+  2. **Readable GitHub review output — done.** `_render_review`
+     (`ai/graphs/pr_review.py`) now emits a summary line with a per-severity
+     breakdown, then a collapsible `<details>` section per severity (critical/high
+     expanded, medium/low collapsed), code-span `` `path:line` `` citations, and each
+     finding's category + confidence %. Presentation-only — the deterministic
+     dedupe/rank/cap in `_dedupe_rank` is untouched (verified the render preserves the
+     severity→confidence order).
 
 ## Observability — LangSmith wiring (2026-06-28)
 
