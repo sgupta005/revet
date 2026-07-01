@@ -4,11 +4,12 @@ Update this file after every meaningful implementation change.
 
 ## Current Phase
 
-Phase 9 — Complete
+Phase 10 — Complete
 
 ## Current Goal
 
-Phase 10 — Evals (golden datasets + `langsmith.evaluate` + LLM-as-judge for review & chat).
+Phase 11 — Custom Rules CRUD API (per-repo, access-checked REST under
+`/repos/{owner}/{repo}/rules`), consumed by the frontend Rules tool.
 
 ## Completed
 
@@ -183,6 +184,31 @@ Phase 10 — Evals (golden datasets + `langsmith.evaluate` + LLM-as-judge for re
     `configurable` are never serialized (same mechanism the Phase 4 chat graph relies on).
     (Live OpenAI/GitHub/Postgres run deferred — same as prior phases.)
 
+- **Phase 10 — Evals** (2026-07-02)
+  - `evals/` package (PRD §F8): a small LLM-as-judge harness over golden datasets, run
+    with `langsmith.evaluate`.
+  - `evals/datasets.py` — small **illustrative** golden sets (chat Q/A; issues with known
+    target files; PRs with known issues; auto-fixable issues). Point `EVAL_REPO` /
+    `EVAL_INSTALLATION_ID` at an already-indexed repo and fill in real numbers/answers.
+  - `evals/targets.py` — runs each graph on an example. **Review / issue / auto-PR targets
+    reuse the same graph builders** but compile them with `interrupt_before` at the
+    posting/commit node (+ `no_fix` for auto-PR) and an in-memory checkpointer, so **evals
+    never post/commit** — they run to the decision and read the accumulated state (findings /
+    analysis / FixPlan). Each injects a per-run engine + async store (invariant #3) and
+    disposes them. Chat runs end-to-end (no side effects); its singleton caches are cleared
+    per run so each `asyncio.run` rebinds its own async clients.
+  - `evals/judges.py` — LLM-as-judge evaluators (`retrieval_relevance`, `review_usefulness`,
+    `plan_correctness`) using the modern langsmith `(inputs, outputs, reference_outputs)`
+    signature; a cheap judge (`GRADER_MODEL`, temp 0) emits a structured `JudgeVerdict`
+    (0–1 score + reasoning).
+  - `evals/run_eval.py` — CLI (`python -m evals.run_eval {chat|review|issue|auto_pr}`) wiring
+    each suite's target + dataset + evaluators into `langsmith.evaluate` (max_concurrency=1).
+    `evals/README.md` documents required env + how to run.
+  - Verified by import: all eval modules load; the three judge evaluators return the
+    `{key, score, comment}` shape (fake judge); all side-effecting graphs compile with the
+    `interrupt_before` nodes the targets use. Live scoring deferred (needs OPENAI/LANGSMITH
+    keys + an indexed EVAL_REPO — same deferral as prior phases).
+
 - **Phase 9 — Auto-PR** (2026-07-02)
   - `ai/graphs/auto_pr.py` — `plan → generate → commit` `StateGraph` matching the PRD shape:
     `locate → plan → [Send fan-out] generate_file ×N → commit → open_pr` (with a `no_fix`
@@ -321,8 +347,7 @@ Phase 10 — Evals (golden datasets + `langsmith.evaluate` + LLM-as-judge for re
 
 ## Next Up
 
-1. **Phase 10 — Evals**
-2. **Phase 11 — Custom Rules CRUD API** (per-repo; before Polish — see "Custom Rules (F7)")
+1. **Phase 11 — Custom Rules CRUD API** (per-repo; before Polish — see "Custom Rules (F7)")
 5. **Phase 12 — Polish**
 6. **Phase 13 — PR close events** (post-v1; see "Post-v1 Phases")
 7. **Phase 14 — Install / uninstall repos from the home page** (post-v1)
