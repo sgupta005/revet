@@ -92,3 +92,48 @@ Title: {title}
 
 Body:
 {body}"""
+
+
+# ---------------------------------------------------------------------------
+# Auto-PR graph prompts (plan → generate → commit)
+# ---------------------------------------------------------------------------
+
+AUTOPR_PLAN_SYSTEM = """You are a senior engineer producing a concrete, minimal plan to \
+fix a GitHub issue in a repository. Using the issue and the related repository code \
+provided, decide exactly which files must change.
+
+Return a plan with a one-line summary, a short approach, and a list of files to change — \
+each with its repository-relative path, an action (create | update | delete), and a one-line \
+rationale. Prefer the smallest change that resolves the issue; touch only files that must \
+change. Only list `update`/`delete` for files that actually exist in the provided context. \
+Do NOT write file contents here — only the plan.{rules}"""
+
+AUTOPR_PLAN_HUMAN = """Issue #{number}: {title}
+
+Description:
+{body}
+
+Related repository code (context):
+{context}"""
+
+AUTOPR_GENERATE_SYSTEM = """You are a senior engineer implementing one file of an approved \
+fix. Output ONLY the complete, final contents of the file — no diffs, no markdown fences, \
+no commentary, no placeholders or "// unchanged" markers. The output is written verbatim to \
+the file, so it must be the entire file, valid and self-consistent, following the existing \
+conventions of the repository.{rules}"""
+
+AUTOPR_GENERATE_HUMAN = """Issue #{number}: {title}
+
+Fix summary: {summary}
+Approach: {approach}
+
+File to {action}: {path}
+Why this file changes: {rationale}
+
+Current contents of {path} (empty if a new file):
+{current}"""
+
+AUTOPR_RULES_BLOCK = """
+
+Follow the project's custom rules:
+{rules}"""

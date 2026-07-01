@@ -4,12 +4,11 @@ Update this file after every meaningful implementation change.
 
 ## Current Phase
 
-Phase 8 — Complete
+Phase 9 — Complete
 
 ## Current Goal
 
-Phase 9 — Auto-PR (label-gated `plan → generate → commit` graph → PR + link comment).
-Must inject the repo's custom rules into the plan/generate prompts (see "Custom Rules (F7)").
+Phase 10 — Evals (golden datasets + `langsmith.evaluate` + LLM-as-judge for review & chat).
 
 ## Completed
 
@@ -184,6 +183,44 @@ Must inject the repo's custom rules into the plan/generate prompts (see "Custom 
     `configurable` are never serialized (same mechanism the Phase 4 chat graph relies on).
     (Live OpenAI/GitHub/Postgres run deferred — same as prior phases.)
 
+- **Phase 9 — Auto-PR** (2026-07-02)
+  - `ai/graphs/auto_pr.py` — `plan → generate → commit` `StateGraph` matching the PRD shape:
+    `locate → plan → [Send fan-out] generate_file ×N → commit → open_pr` (with a `no_fix`
+    branch). `locate` fetches the issue, loads `repo_id` + repo custom rules + the default
+    branch, and retrieves related code (repo-scoped, invariant #6) to ground the plan.
+    `plan` emits a strict `FixPlan` via `with_structured_output` at **low temperature**
+    (`AUTOPR_TEMPERATURE=0`), capped at `AUTOPR_MAX_FILES`. `_fan_out` routes: no files →
+    `no_fix`; only deletes → straight to `commit`; else one `generate_file` per create/update
+    file. `generate_file` emits the **complete** file contents (no diffs; for updates it
+    fetches current contents so the model rewrites the whole file), collected via an
+    `operator.add` `generated` reducer. `commit` builds ONE commit on branch
+    `ai-fix/issue-<n>` via the Git Data API (`create_tree` from the base tree — create/update
+    carry `content`, delete carries a null `sha` — → `create_commit` → `create_ref`).
+    `open_pr` opens the PR (`Closes #n`, summary/approach/changes body), comments the PR link
+    on the issue, and upserts the `PullRequest` row (`kind=auto-pr`). `no_fix` comments
+    honestly instead of opening an empty PR. Custom rules injected into both the plan and
+    generate prompts (PRD §F6 relies on §F7). Fresh chat model per call (invariant #3).
+  - `app/github/git.py` — Git Data + Pulls **write** helpers (separate from `pulls.py`'s
+    read/review): `get_branch_head`, `create_tree`, `create_commit`, `create_ref`,
+    `create_pull_request` (returns `OpenedPR{number, html_url}`). Reuses `files.get_file`
+    (update context) and `issues.post_issue_comment` (link comment).
+  - `ai/llm.py` — `make_chat_model` gained a `temperature` kwarg (passed through to
+    `init_chat_model`) so auto-PR can plan/generate deterministically.
+  - `ai/prompts.py` — `AUTOPR_PLAN_SYSTEM/HUMAN`, `AUTOPR_GENERATE_SYSTEM/HUMAN`,
+    `AUTOPR_RULES_BLOCK`. `ai/constants.py` — `AUTOPR_TEMPERATURE`, `AUTOPR_BRANCH_PREFIX`,
+    `AUTOPR_CONTEXT_K`, `AUTOPR_MAX_FILES`.
+  - `run_auto_pr` (Celery entrypoint) mirrors `run_issue_analysis`: per-run engine + async
+    store injected via `config["configurable"]`, per-run checkpointer, fresh `thread_id`,
+    `finally` disposes + `close_redis()`. `app/workers/tasks.py` — `auto_pr` now runs
+    `asyncio.run(run_auto_pr(...))` with retries. Webhook already dispatches `auto_pr` on
+    `issues labeled auto-fix` (Phase 1) — label-gated, no webhook change.
+  - Verified: all graphs + `app.main` import + compile. End-to-end `ainvoke` with fakes
+    (mocked GitHub git/issues/files + DB + fake structured model + fake store): full plan
+    (create+update+delete) builds correct tree entries (content for create/update, null sha
+    for delete), opens PR on `ai-fix/issue-42` into `main` with `Closes #42`, comments the
+    PR link, upserts the auto-pr row; deletes-only skips generation and still commits+opens;
+    empty plan → `no_fix` comments and opens no PR. (Live OpenAI/GitHub/Postgres deferred.)
+
 - **Phase 8 — Issue Analysis** (2026-07-02)
   - `ai/graphs/issue_analysis.py` — agentic-RAG / ReAct `StateGraph`:
     `prepare → agent ↔ tools → format_post`. `prepare` fetches the issue and loads
@@ -284,9 +321,8 @@ Must inject the repo's custom rules into the plan/generate prompts (see "Custom 
 
 ## Next Up
 
-1. **Phase 9 — Auto-PR** (must inject custom rules — see "Custom Rules (F7)")
-3. **Phase 10 — Evals**
-4. **Phase 11 — Custom Rules CRUD API** (per-repo; before Polish — see "Custom Rules (F7)")
+1. **Phase 10 — Evals**
+2. **Phase 11 — Custom Rules CRUD API** (per-repo; before Polish — see "Custom Rules (F7)")
 5. **Phase 12 — Polish**
 6. **Phase 13 — PR close events** (post-v1; see "Post-v1 Phases")
 7. **Phase 14 — Install / uninstall repos from the home page** (post-v1)
@@ -312,8 +348,8 @@ custom-rules reviewer. Three things remain, plus one model change:
   - **Issue Analysis** (Phase 8) — **done**; the repo's rules are injected into the ReAct
     agent's system prompt (`ISSUE_ANALYSIS_RULES_BLOCK`) so suggestions respect them
     (PRD §F4 AC: "Custom rules are respected").
-  - **Auto-PR** (Phase 9) — inject into the `plan`/`generate_file` prompts so generated
-    fixes follow them (PRD §F6 relies on F7).
+  - **Auto-PR** (Phase 9) — **done**; injected into the `plan` and `generate_file` prompts
+    (`AUTOPR_RULES_BLOCK`) so generated fixes follow them (PRD §F6 relies on F7).
   A generous fixed cap (e.g. 50) bounds prompt size in every case (PRD §F7).
 - **Phase 11 — Custom Rules CRUD API** — per-repo, access-checked REST for managing rules,
   consumed by the frontend Rules tool. Endpoints under `/repos/{owner}/{repo}/rules`:
