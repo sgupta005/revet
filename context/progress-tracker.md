@@ -4,12 +4,12 @@ Update this file after every meaningful implementation change.
 
 ## Current Phase
 
-Phase 7 — Complete
+Phase 8 — Complete
 
 ## Current Goal
 
-Phase 8 — Issue Analysis (agentic-RAG / ReAct graph → comment + activity row). The two
-pre–Phase-8 PR-review fixes are **done** (see Completed → "Pre–Phase-8 PR-review fixes").
+Phase 9 — Auto-PR (label-gated `plan → generate → commit` graph → PR + link comment).
+Must inject the repo's custom rules into the plan/generate prompts (see "Custom Rules (F7)").
 
 ## Completed
 
@@ -184,6 +184,53 @@ pre–Phase-8 PR-review fixes are **done** (see Completed → "Pre–Phase-8 PR-
     `configurable` are never serialized (same mechanism the Phase 4 chat graph relies on).
     (Live OpenAI/GitHub/Postgres run deferred — same as prior phases.)
 
+- **Phase 8 — Issue Analysis** (2026-07-02)
+  - `ai/graphs/issue_analysis.py` — agentic-RAG / ReAct `StateGraph`:
+    `prepare → agent ↔ tools → format_post`. `prepare` fetches the issue and loads
+    `repo_id` + the repo's custom rules (`ai/rules.load_repo_and_rules`), seeding the
+    conversation with the issue as the human turn. `agent` binds `CODEBASE_TOOLS` and
+    explores (search → read → grep → follow references); the tool loop is **bounded** by
+    `ISSUE_MAX_TOOL_ROUNDS=6` (invariant #10) — at the cap `agent` drops tools so the turn
+    ends with a real text comment, never a dangling tool call. Builds a **fresh** chat
+    model per call (`make_chat_model`, never the cached singleton — invariant #3).
+    `format_post` posts the agent's final message as one issue comment
+    (`## 🤖 Revet Issue Analysis` header; a fallback line when the model returns empty) and
+    upserts the `Issue` activity row (upsert on repo+number so a re-analysis never dupes).
+    Custom rules injected into the system prompt (PRD §F4 AC "custom rules respected", §F7).
+  - `ai/tools.py` — `retrieve_code`/`grep_symbol` now read a **per-run store** from
+    `config["configurable"]["store"]` via new `_store(config)`, falling back to the cached
+    `get_vectorstore()` when none is injected. This resolves the "Tool vectorstore reuse
+    under Celery" open question for tool-using graphs: Celery graph runs (issue/auto-PR)
+    inject a per-run async store so the tools never bind to a closed loop; chat (FastAPI's
+    single loop) injects nothing and keeps the singleton. `retrieve_code` now uses
+    `store.asimilarity_search(..., filter={"repo": repo})` directly (repo-scoped, invariant
+    #6) instead of `get_retriever`.
+  - `app/github/issues.py` — `fetch_issue` (metadata) + `post_issue_comment` (also used for
+    the auto-PR link comment, since a PR is an issue on GitHub's REST surface). Boundary
+    shape `IssueData` is a frozen dataclass.
+  - `ai/prompts.py` — `ISSUE_ANALYSIS_SYSTEM` (rules-injected), `ISSUE_ANALYSIS_RULES_BLOCK`,
+    `ISSUE_ANALYSIS_HUMAN`. `ai/constants.py` — `ISSUE_MAX_TOOL_ROUNDS`.
+  - `run_issue_analysis` (Celery entrypoint) mirrors `run_pr_review`: per-run engine +
+    async store injected via `config["configurable"]`, compiled against a per-run
+    `checkpointer()`, fresh `thread_id` (uuid), and `finally` disposes store/engine + calls
+    `close_redis()` (the pre–Phase-8 loop-aware-Redis follow-up).
+  - `app/workers/tasks.py` — `analyze_issue` now runs `asyncio.run(run_issue_analysis(...))`
+    with `autoretry_for`/`retry_backoff` (3 retries), matching `review_pr`. Webhook already
+    dispatches `analyze_issue` on `issues opened` (Phase 1) — no webhook change.
+  - Verified: all graphs import + compile; chat unaffected by the tools change. End-to-end
+    `ainvoke` with fakes (mocked GitHub + DB helpers + fake store + fake model): direct-answer
+    path posts a `path:line`-citing comment + writes the `Issue` row; tool-loop path runs the
+    tool then answers; empty model output → fallback line; the ReAct loop bounds at exactly
+    `ISSUE_MAX_TOOL_ROUNDS=6` tool rounds then emits a final answer. (Live OpenAI/GitHub/
+    Postgres run deferred — same as prior phases.)
+
+- **Issues activity feed endpoint** (2026-07-02)
+  - `app/api.py` — `GET /repos/{owner}/{repo}/issues` (+ `IssueAnalysisOut`): access-checked
+    (`_authorize_repo`) list of the repo's `Issue` activity rows, `updated_at` desc, shaped as
+    `{issue_number, state, github_url, created_at, updated_at}` with
+    `github_url = https://github.com/{owner}/{repo}/issues/{n}`. Mirrors `GET /pulls`. Backs
+    the frontend Phase 8 "Issues" feed. No new persistence (reuses the `Issue` activity row).
+
 - **Reviews activity feed endpoint** (2026-07-01)
   - `app/api.py` — `GET /repos/{owner}/{repo}/pulls` (+ `PullReviewOut` schema): access-checked
     (`_authorize_repo`) list of the repo's `PullRequest` rows where `kind=review`, `updated_at`
@@ -237,8 +284,7 @@ pre–Phase-8 PR-review fixes are **done** (see Completed → "Pre–Phase-8 PR-
 
 ## Next Up
 
-1. **Phase 8 — Issue Analysis** (must inject custom rules — see "Custom Rules (F7)")
-2. **Phase 9 — Auto-PR** (must inject custom rules — see "Custom Rules (F7)")
+1. **Phase 9 — Auto-PR** (must inject custom rules — see "Custom Rules (F7)")
 3. **Phase 10 — Evals**
 4. **Phase 11 — Custom Rules CRUD API** (per-repo; before Polish — see "Custom Rules (F7)")
 5. **Phase 12 — Polish**
@@ -263,8 +309,9 @@ custom-rules reviewer. Three things remain, plus one model change:
 - **Injection everywhere (not just PR review).** Custom rules must be fetched (repo-scoped)
   and injected into the relevant prompts of **all** rule-aware features:
   - **PR Review** (Phase 7) — done; re-scoped to the repo via `ai/rules.load_repo_and_rules`.
-  - **Issue Analysis** (Phase 8) — inject the repo's rules into the ReAct agent's
-    system prompt so suggestions respect them (PRD §F4 AC: "Custom rules are respected").
+  - **Issue Analysis** (Phase 8) — **done**; the repo's rules are injected into the ReAct
+    agent's system prompt (`ISSUE_ANALYSIS_RULES_BLOCK`) so suggestions respect them
+    (PRD §F4 AC: "Custom rules are respected").
   - **Auto-PR** (Phase 9) — inject into the `plan`/`generate_file` prompts so generated
     fixes follow them (PRD §F6 relies on F7).
   A generous fixed cap (e.g. 50) bounds prompt size in every case (PRD §F7).
@@ -351,10 +398,14 @@ Deferred by request until the core build (Phases 8–11) is complete.
   PGVector store **and** a per-run DB engine, injects them via `config["configurable"]`
   (`store`/`engine`), and the nodes use them directly (`store.asimilarity_search(...,
   filter={"repo": repo})`) instead of the cached singleton; chat models are also built fresh
-  per call (`make_chat_model`, not `get_chat_model`). Phases 7–8 (issue/auto-PR) that use the
-  `ai/tools.py` `@tool`s must do the same — inject a per-task store so the tools don't reach
-  for the cached singleton; the tools already read repo/installation/ref from
-  `config["configurable"]`, so this is additive. *(Confirmed the LangGraph checkpointer
+  per call (`make_chat_model`, not `get_chat_model`). **Resolved for tool-using graphs
+  (Phase 8):** `ai/tools.py` `_store(config)` reads the per-run store from
+  `config["configurable"]["store"]` (injected by `run_issue_analysis`; auto-PR will inject it
+  too), falling back to the cached `get_vectorstore()` only for chat on FastAPI's single loop.
+  So `retrieve_code`/`grep_symbol` never reach a closed-loop singleton in a Celery task. The
+  redis singleton reached via `get_installation_token` (used by `read_file`/`list_dir`/
+  `get_file_tree`) is separately handled by the loop-aware `get_redis()` from the pre–Phase-8
+  fix. *(Confirmed the LangGraph checkpointer
   persists only thread/checkpoint ids + serializable state channels, so injecting the
   non-serializable engine/store objects via `configurable` is safe.)*
 

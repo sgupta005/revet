@@ -18,6 +18,7 @@ from app.db.models import (
     ChatThread,
     IndexingStatus,
     Installation,
+    Issue,
     PRKind,
     PullRequest,
     Repository,
@@ -91,6 +92,14 @@ class MessageOut(BaseModel):
 
 class PullReviewOut(BaseModel):
     pr_number: int
+    state: str
+    github_url: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class IssueAnalysisOut(BaseModel):
+    issue_number: int
     state: str
     github_url: str
     created_at: datetime
@@ -318,6 +327,42 @@ async def list_pull_reviews(
             updated_at=p.updated_at,
         )
         for p in pulls
+    ]
+
+
+@router.get(
+    "/repos/{owner}/{repo}/issues",
+    response_model=list[IssueAnalysisOut],
+)
+async def list_issue_analyses(
+    owner: str,
+    repo: str,
+    authed: AuthedUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[IssueAnalysisOut]:
+    """List the issues Revet has analyzed for a repo, most recent first — a
+    read-only activity feed mirroring `/pulls`. The analysis itself lives on the
+    GitHub issue (`github_url`); this surfaces only the stored `Issue` activity
+    rows. Access-checked: 404 if the app is not installed on the repo, 403 if the
+    user cannot access its installation."""
+    full_name = f"{owner}/{repo}"
+    await _authorize_repo(authed, db, full_name)
+    result = await db.execute(
+        select(Issue)
+        .join(Repository, Repository.id == Issue.repo_id)
+        .where(Repository.full_name == full_name)
+        .order_by(Issue.updated_at.desc())
+    )
+    issues = result.scalars().all()
+    return [
+        IssueAnalysisOut(
+            issue_number=i.github_issue_number,
+            state=i.state,
+            github_url=f"https://github.com/{full_name}/issues/{i.github_issue_number}",
+            created_at=i.created_at,
+            updated_at=i.updated_at,
+        )
+        for i in issues
     ]
 
 

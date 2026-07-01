@@ -34,14 +34,16 @@ def review_pr(repo_full_name: str, installation_id: int, pr_number: int) -> None
     asyncio.run(run_pr_review(repo_full_name, installation_id, pr_number))
 
 
-@celery_app.task(name="analyze_issue")
+@celery_app.task(
+    name="analyze_issue",
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_kwargs={"max_retries": 3},
+)
 def analyze_issue(repo_full_name: str, installation_id: int, issue_number: int) -> None:
-    logger.info(
-        "analyze_issue queued repo=%s installation=%s issue=%s",
-        repo_full_name,
-        installation_id,
-        issue_number,
-    )
+    from ai.graphs.issue_analysis import run_issue_analysis
+
+    asyncio.run(run_issue_analysis(repo_full_name, installation_id, issue_number))
 
 
 @celery_app.task(name="auto_pr")

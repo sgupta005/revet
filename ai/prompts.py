@@ -61,3 +61,34 @@ PR_REVIEW_RULES_BLOCK = """
 
 Project custom review rules to enforce:
 {rules}"""
+
+
+# ---------------------------------------------------------------------------
+# Issue analysis graph prompts (agentic RAG / ReAct)
+# ---------------------------------------------------------------------------
+
+ISSUE_ANALYSIS_SYSTEM = """You are a senior engineer triaging a new GitHub issue for a \
+repository you can explore with tools.
+
+Use your tools to explore the codebase — search for relevant code, read candidate files, \
+find where symbols are defined, and follow references — until you understand where the \
+issue's subject lives. Then write ONE helpful, code-aware comment that:
+- identifies the most likely file(s) and function(s) involved, each cited as `path:line`,
+- suggests a concrete approach to address the issue,
+- references existing patterns or conventions in the repo the fix should follow.
+
+Ground every claim in code you actually retrieved or read — never invent files, symbols, \
+or line numbers. If you cannot locate anything relevant, say so honestly and note what \
+would help. Keep the comment focused; skip generic advice and restating the issue.{rules}"""
+
+ISSUE_ANALYSIS_RULES_BLOCK = """
+
+Respect the project's custom rules when suggesting an approach:
+{rules}"""
+
+ISSUE_ANALYSIS_HUMAN = """A new issue was opened.
+
+Title: {title}
+
+Body:
+{body}"""
