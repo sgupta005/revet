@@ -252,14 +252,17 @@ table exists and the PR-review graph fetches rules and injects them into the
 custom-rules reviewer. Three things remain, plus one model change:
 
 - **Model change — rules are now per-repo, not per-installation.** *(Decision
-  2026-07-02.)* `Rule` moves from an `installation_id` FK to a **`repository_id` FK**
-  (`foreign_key="repository.id"`, indexed) so each repo has its own rule set. This is a
-  schema change (still `create_all`; log it toward the Alembic decision, invariant #11).
-  **Phase 7 (already built) must be updated**: `prepare` in `ai/graphs/pr_review.py`
-  currently loads rules by installation — re-scope it to load by the PR's repository.
+  2026-07-02 — DONE.)* `Rule` moved from an `installation_id` FK to a **`repository_id`
+  FK** (`foreign_key="repository.id"`, indexed) so each repo has its own rule set
+  (`app/db/models.py`). This is a `create_all` schema change (logged toward the Alembic
+  decision, invariant #11). Rule loading was extracted to a shared **`ai/rules.py`
+  `load_repo_and_rules(engine, repo)`** (repo-scoped, `"name: body"` texts, capped at
+  the new `MAX_RULES=50` constant) so PR review, issue analysis, and auto-PR all inject
+  rules the same way. `ai/graphs/pr_review.py` `prepare` now uses it (was loading by
+  installation).
 - **Injection everywhere (not just PR review).** Custom rules must be fetched (repo-scoped)
   and injected into the relevant prompts of **all** rule-aware features:
-  - **PR Review** (Phase 7) — done, but re-scope the lookup to the repo.
+  - **PR Review** (Phase 7) — done; re-scoped to the repo via `ai/rules.load_repo_and_rules`.
   - **Issue Analysis** (Phase 8) — inject the repo's rules into the ReAct agent's
     system prompt so suggestions respect them (PRD §F4 AC: "Custom rules are respected").
   - **Auto-PR** (Phase 9) — inject into the `plan`/`generate_file` prompts so generated
@@ -312,7 +315,10 @@ Deferred by request until the core build (Phases 8–11) is complete.
   aggregator that merges semantically-duplicate findings) only if Phase 9 evals show review
   quality is weak. Changing the reviewer model is a one-constant edit.
 - **Migrations**: v1 uses `create_all()`; note when the schema starts churning so we can
-  adopt Alembic at the right time.
+  adopt Alembic at the right time. **Churn so far:** `Rule.installation_id → repository_id`
+  (2026-07-02, per-repo rules). Two more additive changes are already planned (`PullRequest`
+  state for Phase 13, and this Rule FK) — adopt Alembic before the first change that must
+  preserve existing rows in a live DB.
 - **Embedding dimensions**: PRD specifies `text-embedding-3-small` (1536-dim). If we
   switch embedding models, the vector column dimension must change — this is a breaking
   schema change.

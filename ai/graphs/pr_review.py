@@ -29,9 +29,10 @@ from ai.prompts import (
     PR_REVIEW_SYSTEM,
 )
 from ai.retriever import format_doc
+from ai.rules import load_repo_and_rules
 from ai.schemas import ReviewFinding, ReviewFindings
 from ai.vectorstore import make_vectorstore
-from app.db.models import PRKind, PullRequest, Repository, Rule
+from app.db.models import PRKind, PullRequest
 from app.db.session import build_engine
 from app.github.auth import get_installation_token
 from app.github.constants import GITHUB_API
@@ -97,27 +98,6 @@ def _build_diff(files: list[PRFile]) -> str:
     return "\n\n".join(parts)
 
 
-async def _load_repo_and_rules(
-    engine: AsyncEngine, repo: str
-) -> tuple[int | None, list[str]]:
-    """Return `(repo_id, rule_texts)` for the repo; rules are scoped to the repo's
-    installation. `repo_id` is None when the repo isn't in our DB (review still posts,
-    but no activity row is written)."""
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    async with session_factory() as session:
-        repo_row = (
-            await session.execute(select(Repository).where(Repository.full_name == repo))
-        ).scalar_one_or_none()
-        if repo_row is None:
-            return None, []
-        rules = (
-            await session.execute(
-                select(Rule).where(Rule.installation_id == repo_row.installation_id)
-            )
-        ).scalars().all()
-        return repo_row.id, [f"{r.name}: {r.body}" for r in rules]
-
-
 async def prepare(state: PRReviewState, config: RunnableConfig) -> dict:
     """Fetch the PR (title/body/diff/files) and load repo id + custom rules — the
     shared inputs every reviewer fans out over."""
@@ -126,7 +106,7 @@ async def prepare(state: PRReviewState, config: RunnableConfig) -> dict:
     token = await get_installation_token(installation_id)
     async with httpx.AsyncClient(base_url=GITHUB_API, timeout=30) as client:
         pr = await fetch_pull_request(client, repo, pr_number, token)
-    repo_id, rules = await _load_repo_and_rules(cfg["engine"], repo)
+    repo_id, rules = await load_repo_and_rules(cfg["engine"], repo)
     return {
         "title": pr.title,
         "body": pr.body,
