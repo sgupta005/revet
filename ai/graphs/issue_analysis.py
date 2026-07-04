@@ -31,7 +31,7 @@ from app.redis_client import close_redis
 
 logger = logging.getLogger(__name__)
 
-COMMENT_HEADER = "## 🤖 Revet Issue Analysis"
+COMMENT_HEADER = "##Revet Issue Analysis"
 _FALLBACK = "I couldn't find enough relevant code in this repository to analyze this issue."
 
 
