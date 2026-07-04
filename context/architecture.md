@@ -83,16 +83,20 @@ prepare ─▶ retrieve_context ─▶ [Send fan-out] ─▶ correctness_reviewe
 create_react_agent(tools=[retrieve_code, read_file, grep_symbol, list_directory, get_file_tree])
 → explore repo → emit structured suggestion → post comment
 ```
+Fetches the repo's custom rules (F7) and injects them into the agent's system prompt.
 
 ### Auto-PR (plan → generate → commit)
 ```
 locate (agentic retrieval) ─▶ plan (FixPlan) ─▶ [fan-out per file] generate_file
    ─▶ commit (branch + create/update/delete) ─▶ open_pr (+ link comment on issue)
 ```
+Fetches the repo's custom rules (F7) and injects them into the `plan`/`generate_file` prompts.
 
 ## Storage Model
 
-- **Postgres (relational)**: `Installation`, `Repository`, `Rule`, `PullRequest`, `Issue` tables; *(Phase 5)* `User` (durable identity: `github_id`, `login`, `avatar_url`); *(Phase 6)* `ChatThread` (ownership bridge: `thread_id UUID unique`, `user_id FK→User`, `repo` full-name string, `title` string, `created_at`, `updated_at`). Schema created via `metadata.create_all()` at startup — no migration tool in v1.
+- **Postgres (relational)**: `Installation`, `Repository`, `Rule`, `PullRequest`, `Issue` tables
+  (`Rule` is **repo-scoped** — `repository_id` FK, *changed 2026-07-02 from the Phase 7
+  installation-scoped model*; each repo owns its custom review rules); *(Phase 5)* `User` (durable identity: `github_id`, `login`, `avatar_url`); *(Phase 6)* `ChatThread` (ownership bridge: `thread_id UUID unique`, `user_id FK→User`, `repo` full-name string, `title` string, `created_at`, `updated_at`). Schema created via `metadata.create_all()` at startup — no migration tool in v1.
 - **Postgres (pgvector)**: Code-chunk embeddings — `embedding vector(1536)` + metadata `{repo, path, name, chunk_type, language, start_line, end_line}` + page content. Deterministic id = `hash(repo + path + line-span)` for idempotent upsert. Retrieval always filters on `repo`.
 - **Postgres (LangGraph checkpointer)**: `AsyncPostgresSaver` state for chat memory (keyed by `thread_id`) and durable auto-PR.
 - **Redis**: Celery broker + result backend; GitHub installation token cache (with TTL); webhook delivery-id dedup keys; *(Phase 5)* user **sessions** (`session_token → {user_id, user_token, refresh_token, expires_at}`, with TTL) and a user-installations cache. User/refresh tokens live only here — never in the browser.
@@ -144,6 +148,10 @@ installation/repo routes are access-checked.
 | `GET`  | `/repos/{owner}/{repo}/chat/threads` | List `ChatThread` rows for the authed user + repo (access-checked); ordered by `updated_at` desc |
 | `GET`  | `/chat/threads/{thread_id}` | Return `[{role, content}]` messages for the thread — read back from LangGraph checkpointer; `403` if the thread doesn't belong to the authed user |
 | `GET`  | `/repos/{owner}/{repo}/pulls` | List `PullRequest` rows (`kind=review`) for the repo (access-checked), `updated_at` desc → `[{pr_number, state, github_url, created_at, updated_at}]`. Read-only "Reviews" activity feed; the review body lives only on the GitHub PR (`github_url`) — the row stores no findings/title |
+| `GET`  | `/repos/{owner}/{repo}/rules` | *(Phase 11)* List the repo's custom rules (access-checked) → `[{id, content, created_at, updated_at}]` |
+| `POST` | `/repos/{owner}/{repo}/rules` | *(Phase 11)* Create a rule for the repo (access-checked) |
+| `PUT`/`PATCH` | `/repos/{owner}/{repo}/rules/{rule_id}` | *(Phase 11)* Update a rule (access-checked; the rule must belong to the path repo) |
+| `DELETE` | `/repos/{owner}/{repo}/rules/{rule_id}` | *(Phase 11)* Delete a rule (access-checked; rule must belong to the path repo) |
 
 ## Configuration (env vars)
 

@@ -8,7 +8,8 @@ Phase 7 — Complete
 
 ## Current Goal
 
-Phase 8 — Issue Analysis (agentic-RAG / ReAct graph → comment + activity row).
+Phase 8 — Issue Analysis (agentic-RAG / ReAct graph → comment + activity row). The two
+pre–Phase-8 PR-review fixes are **done** (see Completed → "Pre–Phase-8 PR-review fixes").
 
 ## Completed
 
@@ -197,6 +198,30 @@ Phase 8 — Issue Analysis (agentic-RAG / ReAct graph → comment + activity row
 
 - None.
 
+- **Pre–Phase-8 PR-review fixes** (2026-07-02) — both mandated fixes landed:
+  1. **First-run event-loop error on `review_pr` — fixed at the root.** The last
+     cross-loop async singleton the PR-review path reached was the `redis.asyncio`
+     client (via `get_installation_token`). A `redis.asyncio` client binds its
+     connection pool to the loop it first runs on; each Celery task runs its own
+     `asyncio.run()` loop (invariant #3), so the client created on a *prior* task's
+     (now-closed) loop made the first command on the new loop raise "Event loop is
+     closed" — the pool then evicted the dead connection, which is why the retry
+     succeeded. `app/redis_client.py` `get_redis()` is now **loop-aware**: it caches
+     the client per running loop and rebuilds when the loop changes, so the first run
+     succeeds without the retry. Added `close_redis()` (closes + forgets the client);
+     `run_pr_review` calls it in `finally` alongside the engine/store dispose. FastAPI
+     (one long-lived loop) is unaffected — it never rebuilds. *Follow-up:* the
+     issue/auto-PR entrypoints (Phases 8–9) must call `close_redis()` in `finally`
+     too; `run_index` benefits from loop-aware `get_redis` already but doesn't yet
+     close on teardown (harmless; tidy up if it ever warns).
+  2. **Readable GitHub review output — done.** `_render_review`
+     (`ai/graphs/pr_review.py`) now emits a summary line with a per-severity
+     breakdown, then a collapsible `<details>` section per severity (critical/high
+     expanded, medium/low collapsed), code-span `` `path:line` `` citations, and each
+     finding's category + confidence %. Presentation-only — the deterministic
+     dedupe/rank/cap in `_dedupe_rank` is untouched (verified the render preserves the
+     severity→confidence order).
+
 ## Observability — LangSmith wiring (2026-06-28)
 
 - `app/observability.py` — `configure_langsmith()` bridges the `LANGSMITH_*` settings into
@@ -212,10 +237,68 @@ Phase 8 — Issue Analysis (agentic-RAG / ReAct graph → comment + activity row
 
 ## Next Up
 
-1. **Phase 8 — Issue Analysis**
-2. **Phase 9 — Auto-PR**
+1. **Phase 8 — Issue Analysis** (must inject custom rules — see "Custom Rules (F7)")
+2. **Phase 9 — Auto-PR** (must inject custom rules — see "Custom Rules (F7)")
 3. **Phase 10 — Evals**
-4. **Phase 11 — Polish**
+4. **Phase 11 — Custom Rules CRUD API** (per-repo; before Polish — see "Custom Rules (F7)")
+5. **Phase 12 — Polish**
+6. **Phase 13 — PR close events** (post-v1; see "Post-v1 Phases")
+7. **Phase 14 — Install / uninstall repos from the home page** (post-v1)
+
+## Custom Rules (F7) — cross-phase requirements
+
+Custom review rules (PRD §F7) were **partially** implemented in Phase 7: the `Rule`
+table exists and the PR-review graph fetches rules and injects them into the
+custom-rules reviewer. Three things remain, plus one model change:
+
+- **Model change — rules are now per-repo, not per-installation.** *(Decision
+  2026-07-02.)* `Rule` moves from an `installation_id` FK to a **`repository_id` FK**
+  (`foreign_key="repository.id"`, indexed) so each repo has its own rule set. This is a
+  schema change (still `create_all`; log it toward the Alembic decision, invariant #11).
+  **Phase 7 (already built) must be updated**: `prepare` in `ai/graphs/pr_review.py`
+  currently loads rules by installation — re-scope it to load by the PR's repository.
+- **Injection everywhere (not just PR review).** Custom rules must be fetched (repo-scoped)
+  and injected into the relevant prompts of **all** rule-aware features:
+  - **PR Review** (Phase 7) — done, but re-scope the lookup to the repo.
+  - **Issue Analysis** (Phase 8) — inject the repo's rules into the ReAct agent's
+    system prompt so suggestions respect them (PRD §F4 AC: "Custom rules are respected").
+  - **Auto-PR** (Phase 9) — inject into the `plan`/`generate_file` prompts so generated
+    fixes follow them (PRD §F6 relies on F7).
+  A generous fixed cap (e.g. 50) bounds prompt size in every case (PRD §F7).
+- **Phase 11 — Custom Rules CRUD API** — per-repo, access-checked REST for managing rules,
+  consumed by the frontend Rules tool. Endpoints under `/repos/{owner}/{repo}/rules`:
+  `GET` (list the repo's rules), `POST` (create), `PUT`/`PATCH /{rule_id}` (update),
+  `DELETE /{rule_id}`. Each runs `get_current_user` → `verify_installation_access` on the
+  repo's installation before acting (invariant #13); a rule id is never trusted as a bare
+  capability (verify it belongs to the path repo). Scheduled **before Phase 12 — Polish**
+  so custom rules are fully manageable end-to-end within v1.
+
+## Post-v1 Phases (after Phase 12 — Polish)
+
+Deferred by request until the core build (Phases 8–11) is complete.
+
+- **Phase 13 — PR close events** — subscribe to the `pull_request` `closed` action
+  in the webhook router (`app/github/webhooks.py`). When a closed PR matches a
+  `PullRequest` activity row already in our DB (repo + number), change its status to
+  closed. Requires adding a lifecycle **state/status column** to `PullRequest` (the
+  activity row currently has no state) — a small additive schema change (still
+  `create_all`; note for the Alembic decision). No-op when the PR isn't one we track.
+
+- **Phase 14 — Install / uninstall repos from the home page** — let the user
+  add/remove repos from our UI instead of returning to GitHub each time.
+  **Feasibility (partial, confirmed):** uses the user-to-server token already stored
+  in the Redis session (Phase 5). GitHub exposes
+  `PUT` / `DELETE /user/installations/{installation_id}/repositories/{repository_id}`
+  (add/remove a repo from an *existing* installation); these work with the user OAuth
+  token when the user has admin access **and** the installation is in "only selected
+  repositories" mode. Backend adds two access-checked endpoints wrapping these (via
+  `call_with_refresh`), then upserts / soft-removes the `Repository` row and enqueues
+  `index_repo` (or drops the repo's chunks) to match. **Limits the UI must surface:**
+  creating the very first installation on an account, and switching an installation
+  between "all repos" ↔ "selected repos" mode, still require the GitHub redirect —
+  those cannot be done via API. So the home page manages repo membership of an
+  existing installation directly and falls back to a GitHub link for first-time
+  install / all-repos installations. Frontend counterpart lives in `../revet_fe`.
 
 ## Open Questions
 

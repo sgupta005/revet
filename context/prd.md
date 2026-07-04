@@ -155,10 +155,10 @@ class Repository(SQLModel, table=True):
     indexed_at: datetime | None
     created_at: datetime
 
-class Rule(SQLModel, table=True):                 # custom review guideline, scoped to an installation
-    id: int | None = Field(primary_key=True)
+class Rule(SQLModel, table=True):                 # custom review guideline, scoped to a repository
+    id: int | None = Field(primary_key=True)      # (2026-07-02: repo-scoped, was installation-scoped)
     content: str
-    installation_id: int = Field(foreign_key="installation.id", index=True)
+    repository_id: int = Field(foreign_key="repository.id", index=True)
     created_at: datetime; updated_at: datetime
 
 class PullRequest(SQLModel, table=True):          # activity record (review or auto-pr)
@@ -271,9 +271,11 @@ loop back on failure) and a human-in-the-loop `interrupt()` approval gate before
 
 ### F7 — Custom Review Rules
 **Story:** As a user, I define guidelines the bot enforces across reviews, issue help, and auto-PRs.
-**AC:** CRUD for rules scoped to an installation; rules fetched and injected into the relevant prompts;
+**AC:** CRUD for rules scoped to a **repository** (2026-07-02; was per-installation); rules fetched
+(repo-scoped) and injected into the relevant prompts of PR review, issue analysis, **and** auto-PR;
 a generous fixed cap (e.g. 50) bounds prompt size.
-**Notes:** Stored in the `Rule` table; loaded in `prepare`/agent setup and formatted into prompts.
+**Notes:** Stored in the `Rule` table (`repository_id` FK); loaded in `prepare`/agent setup and
+formatted into prompts. CRUD REST under `/repos/{owner}/{repo}/rules` (Phase 11), access-checked.
 
 ### F8 — Observability & Evaluation (the maturity differentiator)
 **Story:** As the builder, I can trace every AI run and measure output quality.

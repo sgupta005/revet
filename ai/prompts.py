@@ -43,8 +43,9 @@ Review ONLY the changed lines shown in the diff; treat the related repository co
 only. For every concrete issue, emit a finding with the file path, the 1-based line number in \
 the changed file, a severity (low|medium|high|critical), the category "{perspective}", a short \
 comment stating the problem and how to fix it, and your confidence (0-1). Report only issues \
-you can justify from the diff — if you find none, return an empty list. Do not summarize the \
-change or give general praise."""
+you can justify from the diff; if you find none, return an empty list. Do not summarize the \
+change or give general praise. Write the comment in plain, professional prose: no em dashes, \
+no emoji, and no markdown formatting inside the comment text."""
 
 PR_REVIEW_HUMAN = """Pull request: {title}
 
