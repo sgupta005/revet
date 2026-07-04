@@ -42,10 +42,10 @@ logger = logging.getLogger(__name__)
 
 SEVERITY_RANK = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 SEVERITY_LABEL = {
-    "critical": "🔴 Critical",
-    "high": "🟠 High",
-    "medium": "🟡 Medium",
-    "low": "🔵 Low",
+    "critical": "Critical",
+    "high": "High",
+    "medium": "Medium",
+    "low": "Low",
 }
 
 
@@ -224,28 +224,28 @@ async def aggregate(state: PRReviewState) -> dict:
 def _render_review(ranked: list[ReviewFinding], changed_files: list[str]) -> str:
     """Render one markdown review body: a summary line with a per-severity
     breakdown, then a collapsible `<details>` section per severity (critical/high
-    expanded, medium/low collapsed) with code-span `path:line` citations and each
-    finding's category + confidence. Presentation only — `ranked` is already
-    deterministically deduped, ranked (severity then confidence), and capped by
-    `_dedupe_rank`; this function only groups and formats it, preserving that order."""
-    header = "## 🤖 Revet AI Review"
+    expanded, medium/low collapsed) with a bold, larger-type heading. Each finding is
+    a list item; a loose list (blank line between items) keeps the rendered review
+    readable instead of cramped. Confidence is used for ranking only and never shown
+    in the rendered output. Presentation only: `ranked` is already deterministically
+    deduped, ranked (severity then confidence), and capped by `_dedupe_rank`; this
+    function only groups and formats it, preserving that order."""
+    header = "## Revet AI Review"
     n_files = len(changed_files)
     if not ranked:
-        return f"{header}\n\n✅ No issues found across **{n_files}** changed file(s)."
+        return f"{header}\n\nNo issues found across **{n_files}** changed file(s)."
 
     counts: dict[str, int] = {}
     for f in ranked:
         counts[f.severity] = counts.get(f.severity, 0) + 1
-    # SEVERITY_RANK iterates critical→low (insertion order), matching the ranking.
-    breakdown = " · ".join(
-        f"{SEVERITY_LABEL[s].split()[0]} {counts[s]} {s}"
-        for s in SEVERITY_RANK
-        if counts.get(s)
+    # SEVERITY_RANK iterates critical -> low (insertion order), matching the ranking.
+    breakdown = ", ".join(
+        f"{counts[s]} {SEVERITY_LABEL[s]}" for s in SEVERITY_RANK if counts.get(s)
     )
     lines = [
         header,
         "",
-        f"Found **{len(ranked)}** issue(s) across **{n_files}** changed file(s) — {breakdown}.",
+        f"Found **{len(ranked)}** issue(s) across **{n_files}** changed file(s): {breakdown}.",
     ]
     for severity in SEVERITY_RANK:
         group = [f for f in ranked if f.severity == severity]
@@ -255,14 +255,14 @@ def _render_review(ranked: list[ReviewFinding], changed_files: list[str]) -> str
         open_attr = " open" if severity in ("critical", "high") else ""
         lines.append("")
         lines.append(f"<details{open_attr}>")
-        lines.append(f"<summary>{label} ({len(group)})</summary>")
+        lines.append(
+            f'<summary><span style="font-size: 1.1em"><strong>{label}</strong></span> '
+            f"({len(group)})</summary>"
+        )
         lines.append("")
         for f in group:
-            conf = round(f.confidence * 100)
-            lines.append(
-                f"- **`{f.file}:{f.line}`** · {f.category} · {conf}% — {f.comment}"
-            )
-        lines.append("")
+            lines.append(f"- **`{f.file}:{f.line}`** ({f.category}): {f.comment}")
+            lines.append("")
         lines.append("</details>")
     return "\n".join(lines)
 
