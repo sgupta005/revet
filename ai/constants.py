@@ -35,3 +35,7 @@ MAX_FINDINGS = 20  # cap findings posted in one review
 # Custom rules (PRD §F7): per-repo, injected into PR review / issue analysis / auto-PR.
 # A generous fixed cap bounds prompt size in every rule-aware feature.
 MAX_RULES = 50
+
+# Issue analysis (agentic RAG / ReAct). Bound the explore→tools loop (invariant #10);
+# issues need more exploration room than a chat turn, so a higher cap than MAX_TOOL_ROUNDS.
+ISSUE_MAX_TOOL_ROUNDS = 6

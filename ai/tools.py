@@ -1,8 +1,10 @@
 import httpx
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
+from langchain_postgres import PGVector
 
-from ai.retriever import format_doc, get_retriever
+from ai.constants import DEFAULT_K
+from ai.retriever import format_doc
 from ai.vectorstore import get_vectorstore, search_symbol
 from app.github.auth import get_installation_token
 from app.github.constants import GITHUB_API
@@ -17,12 +19,24 @@ def _context(config: RunnableConfig) -> tuple[str, int, str | None]:
     return cfg["repo"], cfg["installation_id"], cfg.get("ref")
 
 
+def _store(config: RunnableConfig) -> PGVector:
+    """Return the vector store to search with. Celery graph runs inject a per-run
+    store via `config["configurable"]["store"]` (each runs its own asyncio.run
+    loop — the cached singleton would bind to a closed loop, invariant #3). Chat
+    runs on FastAPI's single long-lived loop and injects nothing, so it falls back
+    to the cached `get_vectorstore()`."""
+    store = config.get("configurable", {}).get("store")
+    return store if store is not None else get_vectorstore()
+
+
 @tool
 async def retrieve_code(query: str, config: RunnableConfig) -> str:
     """Semantically search the indexed repository and return the most relevant
     code chunks, each with its file path, symbol, and line range."""
     repo, _, _ = _context(config)
-    docs = await get_retriever(repo).ainvoke(query)
+    docs = await _store(config).asimilarity_search(
+        query, k=DEFAULT_K, filter={"repo": repo}
+    )
     if not docs:
         return "No relevant code found."
     return "\n\n---\n\n".join(format_doc(d) for d in docs)
@@ -47,7 +61,7 @@ async def grep_symbol(name: str, config: RunnableConfig) -> str:
     """Find where a symbol (function, class, type, ...) is defined in the indexed
     repository, returning matching paths and line ranges."""
     repo, _, _ = _context(config)
-    matches = await search_symbol(get_vectorstore(), repo, name)
+    matches = await search_symbol(_store(config), repo, name)
     if not matches:
         return f"No symbol matching '{name}' found in the index."
     return "\n".join(
