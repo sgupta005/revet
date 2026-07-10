@@ -39,3 +39,9 @@ MAX_RULES = 50
 # Issue analysis (agentic RAG / ReAct). Bound the explore→tools loop (invariant #10);
 # issues need more exploration room than a chat turn, so a higher cap than MAX_TOOL_ROUNDS.
 ISSUE_MAX_TOOL_ROUNDS = 6
+
+# Auto-PR (plan → generate → commit). Low temperature for deterministic plans/code.
+AUTOPR_TEMPERATURE = 0.0
+AUTOPR_BRANCH_PREFIX = "ai-fix/issue-"  # branch = ai-fix/issue-<number>
+AUTOPR_CONTEXT_K = 8  # related-code chunks retrieved during locate
+AUTOPR_MAX_FILES = 10  # cap files a single fix PR may change (bounds fan-out + cost)
