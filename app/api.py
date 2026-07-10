@@ -22,6 +22,7 @@ from app.db.models import (
     PRKind,
     PullRequest,
     Repository,
+    Rule,
     User,
 )
 from app.db.session import get_session as get_db
@@ -104,6 +105,19 @@ class IssueAnalysisOut(BaseModel):
     github_url: str
     created_at: datetime
     updated_at: datetime
+
+
+class RuleOut(BaseModel):
+    id: int
+    name: str
+    body: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class RuleInput(BaseModel):
+    name: str
+    body: str
 
 
 def _user_out(user: User) -> UserOut:
@@ -222,6 +236,15 @@ async def _authorize_repo(authed: AuthedUser, db: AsyncSession, full_name: str) 
         raise HTTPException(status_code=404, detail=f"repo not installed: {full_name}")
     await verify_installation_access(authed, installation_id)
     return installation_id
+
+
+async def _authorize_repo_id(authed: AuthedUser, db: AsyncSession, full_name: str) -> int:
+    """Access-check the repo and return its `Repository.id` — custom rules are
+    scoped by `repository_id`, so handlers need the row id, not just the
+    installation. `_authorize_repo` already 404s when the app isn't installed."""
+    await _authorize_repo(authed, db, full_name)
+    result = await db.execute(select(Repository.id).where(Repository.full_name == full_name))
+    return result.scalar_one()
 
 
 @router.post("/repos/{owner}/{repo}/index", status_code=202)
@@ -364,6 +387,98 @@ async def list_issue_analyses(
         )
         for i in issues
     ]
+
+
+def _rule_out(rule: Rule) -> RuleOut:
+    return RuleOut(
+        id=rule.id,
+        name=rule.name,
+        body=rule.body,
+        created_at=rule.created_at,
+        updated_at=rule.updated_at,
+    )
+
+
+async def _owned_rule(db: AsyncSession, repo_id: int, rule_id: int) -> Rule:
+    """Fetch a rule that belongs to `repo_id`; 404 otherwise. A rule id is never
+    trusted as a bare capability — it must belong to the path repo (invariant #13)."""
+    rule = (
+        await db.execute(
+            select(Rule).where(Rule.id == rule_id, Rule.repository_id == repo_id)
+        )
+    ).scalar_one_or_none()
+    if rule is None:
+        raise HTTPException(status_code=404, detail="rule not found")
+    return rule
+
+
+@router.get("/repos/{owner}/{repo}/rules", response_model=list[RuleOut])
+async def list_rules(
+    owner: str,
+    repo: str,
+    authed: AuthedUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[RuleOut]:
+    """List the repo's custom review rules (the guidelines the bot enforces in PR
+    review, issue analysis, and auto-PR). Access-checked; per-repo."""
+    repo_id = await _authorize_repo_id(authed, db, f"{owner}/{repo}")
+    result = await db.execute(
+        select(Rule).where(Rule.repository_id == repo_id).order_by(Rule.created_at)
+    )
+    return [_rule_out(r) for r in result.scalars().all()]
+
+
+@router.post("/repos/{owner}/{repo}/rules", response_model=RuleOut, status_code=201)
+async def create_rule(
+    owner: str,
+    repo: str,
+    payload: RuleInput,
+    authed: AuthedUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> RuleOut:
+    """Create a custom review rule for the repo. Access-checked."""
+    repo_id = await _authorize_repo_id(authed, db, f"{owner}/{repo}")
+    rule = Rule(repository_id=repo_id, name=payload.name, body=payload.body)
+    db.add(rule)
+    await db.commit()
+    await db.refresh(rule)
+    return _rule_out(rule)
+
+
+@router.put("/repos/{owner}/{repo}/rules/{rule_id}", response_model=RuleOut)
+async def update_rule(
+    owner: str,
+    repo: str,
+    rule_id: int,
+    payload: RuleInput,
+    authed: AuthedUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> RuleOut:
+    """Replace a rule's name/body. Access-checked; the rule must belong to the repo."""
+    repo_id = await _authorize_repo_id(authed, db, f"{owner}/{repo}")
+    rule = await _owned_rule(db, repo_id, rule_id)
+    rule.name = payload.name
+    rule.body = payload.body
+    db.add(rule)
+    await db.commit()
+    await db.refresh(rule)
+    return _rule_out(rule)
+
+
+@router.delete("/repos/{owner}/{repo}/rules/{rule_id}", status_code=204)
+async def delete_rule(
+    owner: str,
+    repo: str,
+    rule_id: int,
+    authed: AuthedUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    """Delete a rule. Access-checked; the rule must belong to the repo."""
+    repo_id = await _authorize_repo_id(authed, db, f"{owner}/{repo}")
+    rule = await _owned_rule(db, repo_id, rule_id)
+    await db.delete(rule)
+    await db.commit()
+    return Response(status_code=204)
 
 
 @router.get("/chat/threads/{thread_id}", response_model=list[MessageOut])
