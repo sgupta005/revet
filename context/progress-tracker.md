@@ -4,11 +4,12 @@ Update this file after every meaningful implementation change.
 
 ## Current Phase
 
-Phase 9 — Complete
+Phase 11 — Complete
 
 ## Current Goal
 
-Phase 10 — Evals (golden datasets + `langsmith.evaluate` + LLM-as-judge for review & chat).
+Phase 12 — Polish (Celery retries/backoff + dead-letter; structured logging; Flower;
+README + diagram). Custom rules are now fully manageable end-to-end (CRUD API + FE Rules UI).
 
 ## Completed
 
@@ -183,6 +184,43 @@ Phase 10 — Evals (golden datasets + `langsmith.evaluate` + LLM-as-judge for re
     `configurable` are never serialized (same mechanism the Phase 4 chat graph relies on).
     (Live OpenAI/GitHub/Postgres run deferred — same as prior phases.)
 
+- **Phase 11 — Custom Rules CRUD API** (2026-07-02)
+  - `app/api.py` — per-repo, access-checked REST under `/repos/{owner}/{repo}/rules`:
+    `GET` (list, ordered by `created_at`), `POST` (create → 201), `PUT /{rule_id}`
+    (replace name/body), `DELETE /{rule_id}` (→ 204). Schemas `RuleOut` / `RuleInput`.
+  - New helper `_authorize_repo_id` (access-checks via `_authorize_repo`, returns the
+    `Repository.id` since rules are scoped by `repository_id`), and `_owned_rule` which
+    fetches a rule **only if it belongs to the path repo** — a rule id is never trusted as a
+    bare capability (invariant #13; 404 otherwise). Every handler runs `get_current_user` +
+    `verify_installation_access` on the repo's installation before acting.
+  - Consumed by the frontend Phase 11 Rules tool (separate `revet_fe` PR).
+  - Verified: `app.main` imports; all four `/rules` routes register.
+
+- **Phase 10 — Evals** (2026-07-02)
+  - `evals/` package (PRD §F8): a small LLM-as-judge harness over golden datasets, run
+    with `langsmith.evaluate`.
+  - `evals/datasets.py` — small **illustrative** golden sets (chat Q/A; issues with known
+    target files; PRs with known issues; auto-fixable issues). Point `EVAL_REPO` /
+    `EVAL_INSTALLATION_ID` at an already-indexed repo and fill in real numbers/answers.
+  - `evals/targets.py` — runs each graph on an example. **Review / issue / auto-PR targets
+    reuse the same graph builders** but compile them with `interrupt_before` at the
+    posting/commit node (+ `no_fix` for auto-PR) and an in-memory checkpointer, so **evals
+    never post/commit** — they run to the decision and read the accumulated state (findings /
+    analysis / FixPlan). Each injects a per-run engine + async store (invariant #3) and
+    disposes them. Chat runs end-to-end (no side effects); its singleton caches are cleared
+    per run so each `asyncio.run` rebinds its own async clients.
+  - `evals/judges.py` — LLM-as-judge evaluators (`retrieval_relevance`, `review_usefulness`,
+    `plan_correctness`) using the modern langsmith `(inputs, outputs, reference_outputs)`
+    signature; a cheap judge (`GRADER_MODEL`, temp 0) emits a structured `JudgeVerdict`
+    (0–1 score + reasoning).
+  - `evals/run_eval.py` — CLI (`python -m evals.run_eval {chat|review|issue|auto_pr}`) wiring
+    each suite's target + dataset + evaluators into `langsmith.evaluate` (max_concurrency=1).
+    `evals/README.md` documents required env + how to run.
+  - Verified by import: all eval modules load; the three judge evaluators return the
+    `{key, score, comment}` shape (fake judge); all side-effecting graphs compile with the
+    `interrupt_before` nodes the targets use. Live scoring deferred (needs OPENAI/LANGSMITH
+    keys + an indexed EVAL_REPO — same deferral as prior phases).
+
 - **Phase 9 — Auto-PR** (2026-07-02)
   - `ai/graphs/auto_pr.py` — `plan → generate → commit` `StateGraph` matching the PRD shape:
     `locate → plan → [Send fan-out] generate_file ×N → commit → open_pr` (with a `no_fix`
@@ -321,11 +359,9 @@ Phase 10 — Evals (golden datasets + `langsmith.evaluate` + LLM-as-judge for re
 
 ## Next Up
 
-1. **Phase 10 — Evals**
-2. **Phase 11 — Custom Rules CRUD API** (per-repo; before Polish — see "Custom Rules (F7)")
-5. **Phase 12 — Polish**
-6. **Phase 13 — PR close events** (post-v1; see "Post-v1 Phases")
-7. **Phase 14 — Install / uninstall repos from the home page** (post-v1)
+1. **Phase 12 — Polish**
+2. **Phase 13 — PR close events** (post-v1; see "Post-v1 Phases")
+3. **Phase 14 — Install / uninstall repos from the home page** (post-v1)
 
 ## Custom Rules (F7) — cross-phase requirements
 
@@ -351,13 +387,12 @@ custom-rules reviewer. Three things remain, plus one model change:
   - **Auto-PR** (Phase 9) — **done**; injected into the `plan` and `generate_file` prompts
     (`AUTOPR_RULES_BLOCK`) so generated fixes follow them (PRD §F6 relies on F7).
   A generous fixed cap (e.g. 50) bounds prompt size in every case (PRD §F7).
-- **Phase 11 — Custom Rules CRUD API** — per-repo, access-checked REST for managing rules,
-  consumed by the frontend Rules tool. Endpoints under `/repos/{owner}/{repo}/rules`:
-  `GET` (list the repo's rules), `POST` (create), `PUT`/`PATCH /{rule_id}` (update),
-  `DELETE /{rule_id}`. Each runs `get_current_user` → `verify_installation_access` on the
-  repo's installation before acting (invariant #13); a rule id is never trusted as a bare
-  capability (verify it belongs to the path repo). Scheduled **before Phase 12 — Polish**
-  so custom rules are fully manageable end-to-end within v1.
+- **Phase 11 — Custom Rules CRUD API** — **DONE** (2026-07-02). Per-repo, access-checked
+  REST under `/repos/{owner}/{repo}/rules`: `GET` (list), `POST` (create), `PUT /{rule_id}`
+  (replace name/body), `DELETE /{rule_id}`. Each runs `get_current_user` →
+  `verify_installation_access` (via `_authorize_repo_id`) before acting (invariant #13); a
+  rule id is verified to belong to the path repo (`_owned_rule`, 404 otherwise) — never a
+  bare capability. Consumed by the frontend Rules tool (`revet_fe` Phase 11).
 
 ## Post-v1 Phases (after Phase 12 — Polish)
 
